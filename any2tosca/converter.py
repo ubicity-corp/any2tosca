@@ -147,7 +147,7 @@ class Converter:
 
     def _tosca_file_for(self, file_part: str) -> str:
         """Derive the expected TOSCA output filename for a JSON Schema file."""
-        return Path(file_part).stem + ".tosca.yaml"
+        return Path(file_part).stem + ".yaml"
 
     def _ref_to_tosca_type(self, ref: str) -> str:
         """

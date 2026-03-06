@@ -356,7 +356,7 @@ def test_external_ref_property_type(tmp_path: Path):
     prop = result.data_types["Person"]["properties"]["home"]
     assert prop["type"] == "address:Address"
     assert "address" in result.imports
-    assert result.imports["address"] == "Address.tosca.yaml"
+    assert result.imports["address"] == "Address.yaml"
 
 
 def test_external_ref_without_base_path():
@@ -374,7 +374,7 @@ def test_external_ref_without_base_path():
     result = c.convert_schema(schema, "top")
     prop = result.data_types["Person"]["properties"]["home"]
     assert prop["type"] == "address:Address"
-    assert result.imports == {"address": "Address.tosca.yaml"}
+    assert result.imports == {"address": "Address.yaml"}
 
 
 def test_external_ref_http_uri_unmatched():
@@ -399,9 +399,9 @@ def test_build_tosca_document_with_imports():
     """imports dict is rendered as a TOSCA imports list."""
     doc = Converter().build_tosca_document(
         {"Foo": {}},
-        imports={"bar": "bar.tosca.yaml"},
+        imports={"bar": "bar.yaml"},
     )
-    assert doc["imports"] == [{"url": "bar.tosca.yaml", "namespace": "bar"}]
+    assert doc["imports"] == [{"url": "bar.yaml", "namespace": "bar"}]
 
 
 # ── CLI integration tests ─────────────────────────────────────────────────────
