@@ -335,6 +335,75 @@ def test_allof_required_merged():
     assert props["b"]["required"] is True
 
 
+# ── External $ref tests ───────────────────────────────────────────────────────
+
+def test_external_ref_property_type(tmp_path: Path):
+    """A $ref to another file produces a namespaced TOSCA type and records an import."""
+    addr_schema = {"type": "object", "properties": {"street": {"type": "string"}}}
+    (tmp_path / "Address.json").write_text(json.dumps({"definitions": {"Address": addr_schema}}))
+
+    schema = {
+        "definitions": {
+            "Person": {
+                "type": "object",
+                "properties": {
+                    "home": {"$ref": "Address.json#/definitions/Address"},
+                },
+            }
+        }
+    }
+    result = c.convert_schema(schema, "top", base_path=tmp_path)
+    prop = result.data_types["Person"]["properties"]["home"]
+    assert prop["type"] == "address:Address"
+    assert "address" in result.imports
+    assert result.imports["address"] == "Address.tosca.yaml"
+
+
+def test_external_ref_without_base_path():
+    """Without base_path, external $refs still produce a namespaced type and record an import."""
+    schema = {
+        "definitions": {
+            "Person": {
+                "type": "object",
+                "properties": {
+                    "home": {"$ref": "Address.json#/definitions/Address"},
+                },
+            }
+        }
+    }
+    result = c.convert_schema(schema, "top")
+    prop = result.data_types["Person"]["properties"]["home"]
+    assert prop["type"] == "address:Address"
+    assert result.imports == {"address": "Address.tosca.yaml"}
+
+
+def test_external_ref_http_uri_unmatched():
+    """HTTP URI $refs with no matching $id in the registry fall back to 'string'."""
+    schema = {
+        "definitions": {
+            "Thing": {
+                "type": "object",
+                "properties": {
+                    "id": {"$ref": "http://example.com/schemas/Id.json#/definitions/Id"},
+                },
+            }
+        }
+    }
+    result = c.convert_schema(schema, "top")
+    prop = result.data_types["Thing"]["properties"]["id"]
+    assert prop["type"] == "string"
+    assert result.imports == {}
+
+
+def test_build_tosca_document_with_imports():
+    """imports dict is rendered as a TOSCA imports list."""
+    doc = Converter().build_tosca_document(
+        {"Foo": {}},
+        imports={"bar": "bar.tosca.yaml"},
+    )
+    assert doc["imports"] == [{"file": "bar.tosca.yaml", "namespace": "bar"}]
+
+
 # ── CLI integration tests ─────────────────────────────────────────────────────
 
 @pytest.fixture()

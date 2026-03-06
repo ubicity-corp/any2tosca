@@ -94,10 +94,11 @@ def _report(result: ConversionResult, verbose: bool, path: Path) -> None:
 def _write_output(
     all_data_types: dict,
     all_node_types: dict,
+    all_imports: dict,
     input_files: list[Path],
     args: argparse.Namespace,
 ) -> None:
-    tosca_doc = build_tosca_document(all_data_types, all_node_types)
+    tosca_doc = build_tosca_document(all_data_types, all_node_types, all_imports or None)
     yaml_output = dump_tosca_yaml(tosca_doc)
 
     if args.output:
@@ -133,6 +134,7 @@ def main_json(argv: list[str] | None = None) -> int:
 
     all_data_types: dict = {}
     all_node_types: dict = {}
+    all_imports: dict = {}
     errors = 0
 
     for schema_path in input_files:
@@ -148,16 +150,17 @@ def main_json(argv: list[str] | None = None) -> int:
             continue
 
         top_name = root_schema.get("title") or schema_path.stem
-        result = convert_schema(root_schema, top_name)
+        result = convert_schema(root_schema, top_name, base_path=schema_path.parent)
         _report(result, args.verbose, schema_path)
         all_data_types.update(result.data_types)
         all_node_types.update(result.node_types)
+        all_imports.update(result.imports)
 
     if not all_data_types and not all_node_types:
         print("No types were generated.", file=sys.stderr)
         return 1
 
-    _write_output(all_data_types, all_node_types, input_files, args)
+    _write_output(all_data_types, all_node_types, all_imports, input_files, args)
 
     if errors:
         print(f"⚠   {errors} file(s) had errors and were skipped.", file=sys.stderr)
@@ -187,6 +190,7 @@ def main_redfish(argv: list[str] | None = None) -> int:
     converter = Converter()
     all_data_types: dict = {}
     all_node_types: dict = {}
+    all_imports: dict = {}
     errors = 0
 
     for schema_path in input_files:
@@ -206,16 +210,17 @@ def main_redfish(argv: list[str] | None = None) -> int:
         # definitions-based schemas top_name is only used as a fallback for
         # the top-level object (which the converter will ignore anyway).
         top_name = next(iter(node_type_names), None) or schema_path.stem
-        result = converter.convert_schema(root_schema, top_name, node_type_names)
+        result = converter.convert_schema(root_schema, top_name, node_type_names, base_path=schema_path.parent)
         _report(result, args.verbose, schema_path)
         all_data_types.update(result.data_types)
         all_node_types.update(result.node_types)
+        all_imports.update(result.imports)
 
     if not all_data_types and not all_node_types:
         print("No types were generated.", file=sys.stderr)
         return 1
 
-    _write_output(all_data_types, all_node_types, input_files, args)
+    _write_output(all_data_types, all_node_types, all_imports, input_files, args)
 
     if errors:
         print(f"⚠   {errors} file(s) had errors and were skipped.", file=sys.stderr)
@@ -246,6 +251,7 @@ def main_oas(argv: list[str] | None = None) -> int:
     converter = Converter()
     all_data_types: dict = {}
     all_node_types: dict = {}
+    all_imports: dict = {}
     errors = 0
 
     for api_path in input_files:
@@ -265,16 +271,17 @@ def main_oas(argv: list[str] | None = None) -> int:
             openapi_doc.get("info", {}).get("title")
             or api_path.stem
         )
-        result = converter.convert_schema(root_schema, top_name, node_type_names)
+        result = converter.convert_schema(root_schema, top_name, node_type_names, base_path=api_path.parent)
         _report(result, args.verbose, api_path)
         all_data_types.update(result.data_types)
         all_node_types.update(result.node_types)
+        all_imports.update(result.imports)
 
     if not all_data_types and not all_node_types:
         print("No types were generated.", file=sys.stderr)
         return 1
 
-    _write_output(all_data_types, all_node_types, input_files, args)
+    _write_output(all_data_types, all_node_types, all_imports, input_files, args)
 
     if errors:
         print(f"⚠   {errors} file(s) had errors and were skipped.", file=sys.stderr)

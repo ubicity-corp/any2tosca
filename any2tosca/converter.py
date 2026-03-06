@@ -6,6 +6,9 @@ Core logic for converting JSON Schema documents to TOSCA data types.
 
 from __future__ import annotations
 
+import json
+import re
+from pathlib import Path
 from typing import Any, NamedTuple
 
 from .yaml_utils import FoldedStr
@@ -17,6 +20,7 @@ class ConversionResult(NamedTuple):
     """Holds the output of a schema conversion."""
     data_types: dict[str, Any]
     node_types: dict[str, Any]
+    imports: dict[str, str] = {}  # namespace → tosca_file
 
 
 class Converter:
@@ -32,21 +36,164 @@ class Converter:
         "null":    "string",   # TOSCA has no null; fall back to string
     }
 
+    def __init__(self) -> None:
+        self._base_path: Path | None = None
+        self._imports: dict[str, str] = {}      # namespace → tosca_file
+        self._id_registry: dict[str, Path] | None = None  # $id URI → local file
+
     # ── Internal helpers ──────────────────────────────────────────────────────
 
     def sanitize_name(self, name: str) -> str:
         """Make a string safe for use as a TOSCA type / property name."""
         return name.replace(" ", "_").replace("-", "_").replace(".", "_")
 
+    def _get_id_registry(self) -> dict[str, Path]:
+        """
+        Lazily build a ``{$id URI → local Path}`` registry by scanning all
+        ``.json`` files in ``_base_path`` for their ``$id`` field.
+        Reset in ``convert_schema`` when ``_base_path`` changes.
+        """
+        if self._id_registry is not None:
+            return self._id_registry
+        self._id_registry = {}
+        if self._base_path is None:
+            return self._id_registry
+        for json_file in self._base_path.glob("*.json"):
+            try:
+                with open(json_file, encoding="utf-8") as fh:
+                    schema = json.load(fh)
+                if isinstance(schema, dict) and "$id" in schema:
+                    self._id_registry[schema["$id"]] = json_file
+            except (OSError, json.JSONDecodeError):
+                pass
+        return self._id_registry
+
+    def _parse_ref(self, ref: str) -> tuple[str | None, str]:
+        """
+        Split a ``$ref`` into ``(file_part, type_name)``.
+
+        Returns ``(None, type_name)`` for local refs (``#/...``).
+        Returns ``(filename, type_name)`` for relative or URI file refs.
+        URI refs are resolved via the ``$id`` registry; unmatched URIs
+        return ``(None, "")``.
+        """
+        if ref.startswith("#"):
+            return None, self.sanitize_name(ref.split("/")[-1])
+
+        if "://" in ref:
+            uri_no_frag, _, fragment = ref.partition("#")
+            file_path = self._get_id_registry().get(uri_no_frag)
+            if file_path is None:
+                return None, ""
+            type_name = self.sanitize_name(fragment.split("/")[-1]) if fragment else self.sanitize_name(file_path.stem)
+            return file_path.name, type_name
+
+        file_part, _, fragment = ref.partition("#")
+        if not file_part:
+            return None, ""
+        type_name = self.sanitize_name(fragment.split("/")[-1]) if fragment else self.sanitize_name(Path(file_part).stem)
+        return file_part, type_name
+
+    def _namespace_for(self, file_part: str) -> str:
+        """
+        Derive a short TOSCA namespace identifier (≤8 chars, lowercase) from
+        a JSON Schema filename.
+
+        Strategy:
+        1. Strip version suffix (e.g. ``.v1_0_0``).
+        2. Split PascalCase / separator-delimited string into words.
+        3. If the joined words fit in 8 chars, return them joined.
+        4. Otherwise contract each word by removing non-leading vowels.
+        5. If still >8 chars, distribute 8 chars proportionally across words.
+        """
+        stem = Path(file_part).stem
+        base = re.sub(r"[._]v\d+(?:[._]\d+)*$", "", stem) or stem
+
+        # Split on PascalCase boundaries and non-alphanumeric separators
+        spaced = re.sub(r"([a-z])([A-Z])", r"\1 \2", base)
+        spaced = re.sub(r"[^a-zA-Z0-9]+", " ", spaced)
+        words = [w.lower() for w in spaced.split() if w]
+        if not words:
+            words = [base.lower()]
+
+        joined = "".join(words)
+        if len(joined) <= 8:
+            return joined
+
+        # Contract: remove non-leading vowels from each word
+        def _contract(w: str) -> str:
+            return w[0] + re.sub(r"[aeiou]", "", w[1:]) if len(w) > 1 else w
+
+        contracted = [_contract(w) for w in words]
+        result = "".join(contracted)
+        if len(result) <= 8:
+            return result
+
+        # Still too long: distribute 8 chars proportionally across contracted words
+        n = len(contracted)
+        base_len = 8 // n
+        extra = 8 % n
+        return "".join(w[:base_len + (1 if i < extra else 0)] for i, w in enumerate(contracted))
+
+    def _tosca_file_for(self, file_part: str) -> str:
+        """Derive the expected TOSCA output filename for a JSON Schema file."""
+        return Path(file_part).stem + ".tosca.yaml"
+
+    def _ref_to_tosca_type(self, ref: str) -> str:
+        """
+        Convert a ``$ref`` to a TOSCA type name.
+
+        External file refs are registered in ``self._imports`` and returned
+        as ``namespace:TypeName``; local refs are returned as plain type names.
+        """
+        file_part, type_name = self._parse_ref(ref)
+        if not type_name:
+            return "string"  # unresolvable external URI
+        if file_part is None:
+            return type_name  # local ref
+        namespace = self._namespace_for(file_part)
+        self._imports[namespace] = self._tosca_file_for(file_part)
+        return f"{namespace}:{type_name}"
+
     def resolve_ref(self, ref: str, root_schema: dict[str, Any]) -> dict[str, Any]:
         """
-        Minimal local ``$ref`` resolver.
-        Only handles ``#/definitions/<name>`` and ``#/$defs/<name>`` patterns.
+        Resolve a ``$ref`` to its schema dict.
+
+        Handles local refs (``#/definitions/<name>``, ``#/$defs/<name>``) and,
+        when ``_base_path`` is set, relative file refs.
         """
-        if not ref.startswith("#/"):
+        if ref.startswith("#/"):
+            parts = ref.lstrip("#/").split("/")
+            node: Any = root_schema
+            for part in parts:
+                if isinstance(node, dict) and part in node:
+                    node = node[part]
+                else:
+                    return {}
+            return node if isinstance(node, dict) else {}
+
+        if self._base_path is None:
             return {}
-        parts = ref.lstrip("#/").split("/")
-        node: Any = root_schema
+
+        if "://" in ref:
+            uri_no_frag, _, fragment = ref.partition("#")
+            ext_path = self._get_id_registry().get(uri_no_frag)
+            if ext_path is None:
+                return {}
+        else:
+            file_part, _, fragment = ref.partition("#")
+            ext_path = self._base_path / file_part
+        try:
+            with open(ext_path, encoding="utf-8") as fh:
+                ext_schema = json.load(fh)
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+        if not fragment:
+            return ext_schema if isinstance(ext_schema, dict) else {}
+
+        parts = fragment.lstrip("/").split("/")
+        node = ext_schema
         for part in parts:
             if isinstance(node, dict) and part in node:
                 node = node[part]
@@ -116,7 +263,7 @@ class Converter:
         for sub in schema["allOf"]:
             if "$ref" in sub and len(sub) == 1:
                 # Pure $ref → treat as base type (inheritance)
-                derived_from = self.sanitize_name(sub["$ref"].split("/")[-1])
+                derived_from = self._ref_to_tosca_type(sub["$ref"])
             else:
                 resolved = self.resolve_ref(sub["$ref"], root_schema) if "$ref" in sub else sub
                 merged_props.update(resolved.get("properties", {}))
@@ -168,7 +315,7 @@ class Converter:
 
         # $ref → use the referenced TOSCA data type name directly
         if "$ref" in prop_schema:
-            ref_type_name = self.sanitize_name(prop_schema["$ref"].split("/")[-1])
+            ref_type_name = self._ref_to_tosca_type(prop_schema["$ref"])
             ref_schema = self.resolve_ref(prop_schema["$ref"], root_schema)
             merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
             prop_def: dict[str, Any] = {"type": ref_type_name}
@@ -218,7 +365,7 @@ class Converter:
         if tosca_type == "list":
             items = prop_schema.get("items", {})
             if "$ref" in items:
-                item_tosca_type = self.sanitize_name(items["$ref"].split("/")[-1])
+                item_tosca_type = self._ref_to_tosca_type(items["$ref"])
             else:
                 item_tosca_type = self.get_tosca_type(items.get("type"), items, root_schema)
             prop_def["entry_schema"] = {"type": item_tosca_type}
@@ -228,7 +375,7 @@ class Converter:
             add_props = prop_schema.get("additionalProperties", {})
             if isinstance(add_props, dict):
                 if "$ref" in add_props:
-                    val_type = self.sanitize_name(add_props["$ref"].split("/")[-1])
+                    val_type = self._ref_to_tosca_type(add_props["$ref"])
                 else:
                     val_type = self.get_tosca_type(add_props.get("type"), add_props, root_schema)
                 prop_def["entry_schema"] = {"type": val_type}
@@ -312,9 +459,10 @@ class Converter:
         root_schema: dict[str, Any],
         top_level_name: str,
         node_type_names: frozenset[str] | set[str] = frozenset(),
+        base_path: Path | None = None,
     ) -> ConversionResult:
         """
-        Convert an entire JSON Schema document to a dict of TOSCA ``data_types``.
+        Convert an entire JSON Schema document to TOSCA types.
 
         Parameters
         ----------
@@ -323,12 +471,19 @@ class Converter:
         top_level_name:
             Name to use for the top-level schema object if it is an ``object`` type.
             Typically derived from the schema's ``title`` field or the file stem.
+        base_path:
+            Directory containing the schema file.  When provided, external
+            ``$ref`` values are resolved relative to this directory and the
+            corresponding TOSCA files are recorded as imports.
 
         Returns
         -------
         ConversionResult
-            Named tuple with ``data_types`` and ``node_types`` dicts.
+            Named tuple with ``data_types``, ``node_types``, and ``imports`` dicts.
         """
+        self._base_path = base_path
+        self._id_registry = None  # rebuild for new base_path
+        self._imports = {}
         data_types: dict[str, Any] = {}
         node_types: dict[str, Any] = {}
 
@@ -352,18 +507,21 @@ class Converter:
         if root_schema.get("type") == "object" or root_schema.get("properties"):
             _add(self.sanitize_name(top_level_name), root_schema, root_schema)
 
-        return ConversionResult(data_types=data_types, node_types=node_types)
+        return ConversionResult(data_types=data_types, node_types=node_types, imports=dict(self._imports))
 
     def build_tosca_document(
         self,
         data_types: dict[str, Any],
         node_types: dict[str, Any] | None = None,
+        imports: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Wrap type dicts in a full TOSCA service-template skeleton."""
         doc: dict[str, Any] = {
             "tosca_definitions_version": "tosca_2_0",
             "description": FoldedStr("Types generated from JSON Schema by any2tosca"),
         }
+        if imports:
+            doc["imports"] = [{"file": file, "namespace": ns} for ns, file in imports.items()]
         if data_types:
             doc["data_types"] = data_types
         if node_types:
@@ -377,12 +535,14 @@ def convert_schema(
     root_schema: dict[str, Any],
     top_level_name: str,
     node_type_names: frozenset[str] | set[str] = frozenset(),
+    base_path: Path | None = None,
 ) -> ConversionResult:
-    return Converter().convert_schema(root_schema, top_level_name, node_type_names)
+    return Converter().convert_schema(root_schema, top_level_name, node_type_names, base_path)
 
 
 def build_tosca_document(
     data_types: dict[str, Any],
     node_types: dict[str, Any] | None = None,
+    imports: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    return Converter().build_tosca_document(data_types, node_types)
+    return Converter().build_tosca_document(data_types, node_types, imports)
