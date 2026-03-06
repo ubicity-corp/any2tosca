@@ -299,7 +299,7 @@ class Converter:
         """Wrap type dicts in a full TOSCA service-template skeleton."""
         doc: dict[str, Any] = {
             "tosca_definitions_version": "tosca_2_0",
-            "description": "Types generated from JSON Schema by json2tosca",
+            "description": "Types generated from JSON Schema by any2tosca",
         }
         if data_types:
             doc["data_types"] = data_types

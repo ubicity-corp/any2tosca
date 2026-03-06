@@ -15,9 +15,9 @@ pytest
 pytest tests/test_converter.py::test_convert_schema_top_level
 
 # Run the CLI
-json2tosca my_schema.json
-json2tosca my_schema.json -o output.yaml
-json2tosca schemas/ -o combined.yaml
+any2tosca my_schema.json
+any2tosca my_schema.json -o output.yaml
+any2tosca schemas/ -o combined.yaml
 ```
 
 ## Architecture
@@ -26,9 +26,9 @@ This is a Python package that converts [JSON Schema](https://json-schema.org/) d
 
 **Core modules:**
 
-- `json2tosca/converter.py` — all conversion logic: `convert_schema()` is the main entry point, `build_tosca_document()` wraps output in a TOSCA service-template skeleton. Handles `$ref` resolution (local only: `#/definitions/<name>` and `#/$defs/<name>`), constraint mapping, and type coercion.
-- `json2tosca/cli.py` — `main()` drives the CLI: collects input files (individual JSON files or directories), merges all `data_types` dicts, writes YAML output. Entry point is `json2tosca.__main__:main` per `setup.cfg`.
-- `json2tosca/yaml_utils.py` — wraps PyYAML's `yaml.dump` with a custom representer for literal block style on multi-line strings.
+- `any2tosca/converter.py` — all conversion logic: `convert_schema()` is the main entry point, `build_tosca_document()` wraps output in a TOSCA service-template skeleton. Handles `$ref` resolution (local only: `#/definitions/<name>` and `#/$defs/<name>`), constraint mapping, and type coercion.
+- `any2tosca/cli.py` — `main()` drives the CLI: collects input files (individual JSON files or directories), merges all `data_types` dicts, writes YAML output. Entry point is `any2tosca.__main__:main` per `setup.cfg`.
+- `any2tosca/yaml_utils.py` — wraps PyYAML's `yaml.dump` with a custom representer for literal block style on multi-line strings.
 
 **Conversion flow:**
 

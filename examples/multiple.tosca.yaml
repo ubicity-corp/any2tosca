@@ -1,5 +1,5 @@
 tosca_definitions_version: tosca_simple_yaml_1_3
-description: Data types generated from JSON Schema by json2tosca
+description: Data types generated from JSON Schema by any2tosca
 data_types:
   schemaA:
     derived_from: string

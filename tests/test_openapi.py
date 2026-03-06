@@ -5,8 +5,8 @@ Tests for the OpenAPIExtractor pre-processor.
 """
 
 import pytest
-from json2tosca.openapi import OpenAPIExtractor
-from json2tosca.converter import Converter
+from any2tosca.openapi import OpenAPIExtractor
+from any2tosca.converter import Converter
 
 e = OpenAPIExtractor()
 

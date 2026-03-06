@@ -1,7 +1,7 @@
 """
 cli.py
 ------
-Command-line entry points for json2tosca, redfish2tosca, and oas2tosca.
+Command-line entry points for any2tosca, redfish2tosca, and oas2tosca.
 """
 
 from __future__ import annotations
@@ -112,17 +112,17 @@ def _write_output(
     print(f"\n✅  TOSCA output written to: {out_path}")
 
 
-# ── json2tosca ────────────────────────────────────────────────────────────────
+# ── any2tosca ────────────────────────────────────────────────────────────────
 
 def main(argv: list[str] | None = None) -> int:
     """Convert plain JSON Schema files to TOSCA."""
     parser = _make_parser(
-        "json2tosca",
+        "any2tosca",
         "Convert JSON Schema files to TOSCA data types (YAML).",
         "Examples:\n"
-        "  json2tosca my_schema.json\n"
-        "  json2tosca schemas/ -o tosca_types.yaml\n"
-        "  json2tosca a.json b.json -o combined.yaml",
+        "  any2tosca my_schema.json\n"
+        "  any2tosca schemas/ -o tosca_types.yaml\n"
+        "  any2tosca a.json b.json -o combined.yaml",
     )
     args = parser.parse_args(argv)
     input_files = _collect_input_files(args.inputs, (".json",))

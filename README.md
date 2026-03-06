@@ -1,4 +1,4 @@
-# json2tosca
+# any2tosca
 
 Convert [JSON Schema](https://json-schema.org/) documents to
 [TOSCA](https://docs.oasis-open.org/tosca/TOSCA-Simple-Profile-YAML/v1.3/)
@@ -7,14 +7,14 @@ data types (YAML).
 ## Installation
 
 ```bash
-pip install json2tosca
+pip install any2tosca
 ```
 
 Or install from source:
 
 ```bash
-git clone https://github.com/your-org/json2tosca
-cd json2tosca
+git clone https://github.com/your-org/any2tosca
+cd any2tosca
 pip install -e ".[dev]"
 ```
 
@@ -22,27 +22,27 @@ pip install -e ".[dev]"
 
 ```bash
 # Single file → <name>.tosca.yaml
-json2tosca my_schema.json
+any2tosca my_schema.json
 
 # Single file with explicit output path
-json2tosca my_schema.json -o types.yaml
+any2tosca my_schema.json -o types.yaml
 
 # Multiple files merged into one output
-json2tosca a.json b.json -o combined.yaml
+any2tosca a.json b.json -o combined.yaml
 
 # Entire directory of .json files
-json2tosca schemas/ -o tosca_types.yaml
+any2tosca schemas/ -o tosca_types.yaml
 
 # Verbose output
-json2tosca schemas/ -v -o tosca_types.yaml
+any2tosca schemas/ -v -o tosca_types.yaml
 ```
 
 ## Python API
 
 ```python
 import json
-from json2tosca import convert_schema, build_tosca_document
-from json2tosca.yaml_utils import dump_tosca_yaml
+from any2tosca import convert_schema, build_tosca_document
+from any2tosca.yaml_utils import dump_tosca_yaml
 
 with open("my_schema.json") as f:
     root_schema = json.load(f)

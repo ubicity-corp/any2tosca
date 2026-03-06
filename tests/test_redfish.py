@@ -5,8 +5,8 @@ Tests for the RedfishNormalizer pre-processor.
 """
 
 import pytest
-from json2tosca.redfish import RedfishNormalizer
-from json2tosca.converter import Converter
+from any2tosca.redfish import RedfishNormalizer
+from any2tosca.converter import Converter
 
 n = RedfishNormalizer()
 

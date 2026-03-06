@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 #build-backend = "setuptools.backends.legacy:build"
 
 [project]
-name = "json2tosca"
+name = "any2tosca"
 version = "0.1.0"
 description = "Convert JSON Schema files to TOSCA data types"
 readme = "README.md"
@@ -35,13 +35,13 @@ dev = [
 ]
 
 [project.scripts]
-json2tosca = "json2tosca.cli:cli_entry"
-redfish2tosca = "json2tosca.cli:redfish_entry"
-oas2tosca = "json2tosca.cli:oas_entry"
+any2tosca = "any2tosca.cli:cli_entry"
+redfish2tosca = "any2tosca.cli:redfish_entry"
+oas2tosca = "any2tosca.cli:oas_entry"
 
 [project.urls]
-Homepage = "https://github.com/your-org/json2tosca"
-Issues   = "https://github.com/your-org/json2tosca/issues"
+Homepage = "https://github.com/your-org/any2tosca"
+Issues   = "https://github.com/your-org/any2tosca/issues"
 
 [tool.setuptools.packages.find]
 # where = ["src"]

@@ -1,7 +1,7 @@
 """
 tests/test_converter.py
 -----------------------
-Unit tests for json2tosca.converter and json2tosca.cli.
+Unit tests for any2tosca.converter and any2tosca.cli.
 """
 
 import json
@@ -11,8 +11,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from json2tosca.converter import Converter, ConversionResult, build_tosca_document, convert_schema
-from json2tosca.cli import main
+from any2tosca.converter import Converter, ConversionResult, build_tosca_document, convert_schema
+from any2tosca.cli import main
 
 c = Converter()
 
