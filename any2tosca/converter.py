@@ -200,8 +200,31 @@ class Converter:
             contents = resolver.lookup(ref).contents
             return contents if isinstance(contents, dict) else {}
         except Exception:
-            print(f"Warning: failed to resolve $ref '{ref}' — schema details will be missing", file=sys.stderr)
-            return {}
+            pass
+
+        # Registry lookup failed — fall back to loading the file directly by name
+        if "://" in ref:
+            uri_no_frag, _, fragment = ref.partition("#")
+            candidate = self._base_path / Path(uri_no_frag).name
+            if candidate.exists():
+                try:
+                    with open(candidate, encoding="utf-8") as fh:
+                        doc = json.load(fh)
+                    if fragment:
+                        node: Any = doc
+                        for part in fragment.lstrip("/").split("/"):
+                            if isinstance(node, dict) and part in node:
+                                node = node[part]
+                            else:
+                                node = {}
+                                break
+                        return node if isinstance(node, dict) else {}
+                    return doc if isinstance(doc, dict) else {}
+                except (OSError, json.JSONDecodeError):
+                    pass
+
+        print(f"Warning: failed to resolve $ref '{ref}' — schema details will be missing", file=sys.stderr)
+        return {}
 
     def get_tosca_type(
         self,
