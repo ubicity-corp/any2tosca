@@ -86,6 +86,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     all_data_types: dict = {}
+    all_node_types: dict = {}
     errors = 0
 
     for schema_path in input_files:
@@ -107,19 +108,22 @@ def main(argv: list[str] | None = None) -> int:
             continue
 
         top_name = root_schema.get("title") or schema_path.stem
-        data_types = convert_schema(root_schema, top_name)
+        result = convert_schema(root_schema, top_name)
 
-        if not data_types:
+        total = len(result.data_types) + len(result.node_types)
+        if not total:
             print(f"  ⚠  No convertible types found.")
         else:
-            print(f"  ✓  {len(data_types)} type(s): {', '.join(data_types)}")
-            all_data_types.update(data_types)
+            names = list(result.data_types) + list(result.node_types)
+            print(f"  ✓  {total} type(s): {', '.join(names)}")
+            all_data_types.update(result.data_types)
+            all_node_types.update(result.node_types)
 
-    if not all_data_types:
-        print("No data types were generated.", file=sys.stderr)
+    if not all_data_types and not all_node_types:
+        print("No types were generated.", file=sys.stderr)
         return 1
 
-    tosca_doc = build_tosca_document(all_data_types)
+    tosca_doc = build_tosca_document(all_data_types, all_node_types)
     yaml_output = dump_tosca_yaml(tosca_doc)
 
     # Determine output path

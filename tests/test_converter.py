@@ -11,7 +11,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from json2tosca.converter import Converter, build_tosca_document, convert_schema
+from json2tosca.converter import Converter, ConversionResult, build_tosca_document, convert_schema
 from json2tosca.cli import main
 
 c = Converter()
@@ -171,20 +171,24 @@ SIMPLE_SCHEMA = {
     },
 }
 
+def test_convert_schema_returns_result():
+    result = convert_schema(SIMPLE_SCHEMA, "Person")
+    assert isinstance(result, ConversionResult)
+
 def test_convert_schema_top_level():
     result = convert_schema(SIMPLE_SCHEMA, "Person")
-    assert "Person" in result
+    assert "Person" in result.data_types
 
 def test_convert_schema_properties():
     result = convert_schema(SIMPLE_SCHEMA, "Person")
-    props = result["Person"]["properties"]
+    props = result.data_types["Person"]["properties"]
     assert "name" in props
     assert "age" in props
 
 def test_convert_schema_required_flag():
     result = convert_schema(SIMPLE_SCHEMA, "Person")
-    assert result["Person"]["properties"]["name"]["required"] is True
-    assert result["Person"]["properties"]["age"]["required"] is False
+    assert result.data_types["Person"]["properties"]["name"]["required"] is True
+    assert result.data_types["Person"]["properties"]["age"]["required"] is False
 
 def test_convert_schema_definitions():
     schema = {
@@ -198,7 +202,7 @@ def test_convert_schema_definitions():
         },
     }
     result = convert_schema(schema, "Root")
-    assert "Address" in result
+    assert "Address" in result.data_types
 
 def test_convert_schema_scalar_def():
     schema = {
@@ -207,17 +211,52 @@ def test_convert_schema_scalar_def():
         }
     }
     result = convert_schema(schema, "Unused")
-    dt = result["DiskType"]
+    dt = result.data_types["DiskType"]
     assert dt["derived_from"] == "string"
     assert dt["validation"] == {"$valid_values": ["$value", ["ssd", "hdd"]]}
+
+def test_convert_schema_node_type():
+    schema = {
+        "definitions": {
+            "Server": {"type": "object", "properties": {"cpu": {"type": "integer"}}},
+            "OsConfig": {"type": "object", "properties": {"name": {"type": "string"}}},
+        }
+    }
+    result = convert_schema(schema, "Unused", node_type_names={"Server"})
+    assert "Server" in result.node_types
+    assert result.node_types["Server"]["derived_from"] == "tosca.nodes.Root"
+    assert "Server" not in result.data_types
+    assert "OsConfig" in result.data_types
+
+def test_convert_schema_node_type_has_properties():
+    schema = {
+        "type": "object",
+        "properties": {"cores": {"type": "integer"}},
+    }
+    result = convert_schema(schema, "Compute", node_type_names={"Compute"})
+    assert "cores" in result.node_types["Compute"]["properties"]
 
 
 # ── build_tosca_document ──────────────────────────────────────────────────────
 
-def test_build_tosca_document_structure():
+def test_build_tosca_document_data_types():
     doc = build_tosca_document({"Foo": {"derived_from": "tosca.datatypes.Root"}})
     assert doc["tosca_definitions_version"] == "tosca_2_0"
     assert "Foo" in doc["data_types"]
+    assert "node_types" not in doc
+
+def test_build_tosca_document_node_types():
+    doc = build_tosca_document({}, {"Server": {"derived_from": "tosca.nodes.Root"}})
+    assert "Server" in doc["node_types"]
+    assert "data_types" not in doc
+
+def test_build_tosca_document_both():
+    doc = build_tosca_document(
+        {"Cfg": {}},
+        {"Server": {"derived_from": "tosca.nodes.Root"}},
+    )
+    assert "data_types" in doc
+    assert "node_types" in doc
 
 
 # ── CLI integration tests ─────────────────────────────────────────────────────

@@ -6,9 +6,15 @@ Core logic for converting JSON Schema documents to TOSCA data types.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, NamedTuple
 
-__all__ = ["Converter", "convert_schema", "build_tosca_document"]
+__all__ = ["Converter", "ConversionResult", "convert_schema", "build_tosca_document"]
+
+
+class ConversionResult(NamedTuple):
+    """Holds the output of a schema conversion."""
+    data_types: dict[str, Any]
+    node_types: dict[str, Any]
 
 
 class Converter:
@@ -209,7 +215,41 @@ class Converter:
 
         return tosca_type
 
-    def convert_schema(self, root_schema: dict[str, Any], top_level_name: str) -> dict[str, Any]:
+    def schema_to_tosca_node_type(
+        self,
+        type_name: str,
+        schema: dict[str, Any],
+        root_schema: dict[str, Any],
+        data_types: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Convert a JSON Schema object definition to a TOSCA ``node_types`` entry."""
+        node_type: dict[str, Any] = {}
+
+        description = schema.get("description") or schema.get("title")
+        if description:
+            node_type["description"] = description
+
+        node_type["derived_from"] = "tosca.nodes.Root"
+
+        properties_schema = schema.get("properties", {})
+        required_list: list[str] = schema.get("required", [])
+
+        if properties_schema:
+            node_type["properties"] = {
+                self.sanitize_name(pname): self.schema_to_property(
+                    pname, pschema, required_list, root_schema, data_types
+                )
+                for pname, pschema in properties_schema.items()
+            }
+
+        return node_type
+
+    def convert_schema(
+        self,
+        root_schema: dict[str, Any],
+        top_level_name: str,
+        node_type_names: frozenset[str] | set[str] = frozenset(),
+    ) -> ConversionResult:
         """
         Convert an entire JSON Schema document to a dict of TOSCA ``data_types``.
 
@@ -223,43 +263,63 @@ class Converter:
 
         Returns
         -------
-        dict
-            Mapping of TOSCA type name → TOSCA data type definition dict.
+        ConversionResult
+            Named tuple with ``data_types`` and ``node_types`` dicts.
         """
         data_types: dict[str, Any] = {}
+        node_types: dict[str, Any] = {}
+
+        def _add(tosca_name: str, schema: dict[str, Any], root: dict[str, Any]) -> None:
+            if tosca_name in node_type_names:
+                node_types[tosca_name] = self.schema_to_tosca_node_type(
+                    tosca_name, schema, root, data_types
+                )
+            else:
+                data_types[tosca_name] = self.schema_to_tosca_data_type(
+                    tosca_name, schema, root, data_types
+                )
 
         # Convert named definitions / $defs first
         for def_name, def_schema in self.collect_definitions(root_schema).items():
             if not isinstance(def_schema, dict):
                 continue
-            tosca_name = self.sanitize_name(def_name)
-            data_types[tosca_name] = self.schema_to_tosca_data_type(
-                tosca_name, def_schema, root_schema, data_types
-            )
+            _add(self.sanitize_name(def_name), def_schema, root_schema)
 
         # Convert the top-level schema if it is an object
         if root_schema.get("type") == "object" or root_schema.get("properties"):
-            safe_top = self.sanitize_name(top_level_name)
-            data_types[safe_top] = self.schema_to_tosca_data_type(
-                safe_top, root_schema, root_schema, data_types
-            )
+            _add(self.sanitize_name(top_level_name), root_schema, root_schema)
 
-        return data_types
+        return ConversionResult(data_types=data_types, node_types=node_types)
 
-    def build_tosca_document(self, all_data_types: dict[str, Any]) -> dict[str, Any]:
-        """Wrap a ``data_types`` dict in a full TOSCA service-template skeleton."""
-        return {
+    def build_tosca_document(
+        self,
+        data_types: dict[str, Any],
+        node_types: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Wrap type dicts in a full TOSCA service-template skeleton."""
+        doc: dict[str, Any] = {
             "tosca_definitions_version": "tosca_2_0",
-            "description": "Data types generated from JSON Schema by json2tosca",
-            "data_types": all_data_types,
+            "description": "Types generated from JSON Schema by json2tosca",
         }
+        if data_types:
+            doc["data_types"] = data_types
+        if node_types:
+            doc["node_types"] = node_types
+        return doc
 
 
 # ── Module-level convenience functions ────────────────────────────────────────
 
-def convert_schema(root_schema: dict[str, Any], top_level_name: str) -> dict[str, Any]:
-    return Converter().convert_schema(root_schema, top_level_name)
+def convert_schema(
+    root_schema: dict[str, Any],
+    top_level_name: str,
+    node_type_names: frozenset[str] | set[str] = frozenset(),
+) -> ConversionResult:
+    return Converter().convert_schema(root_schema, top_level_name, node_type_names)
 
 
-def build_tosca_document(all_data_types: dict[str, Any]) -> dict[str, Any]:
-    return Converter().build_tosca_document(all_data_types)
+def build_tosca_document(
+    data_types: dict[str, Any],
+    node_types: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return Converter().build_tosca_document(data_types, node_types)
