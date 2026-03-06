@@ -259,6 +259,82 @@ def test_build_tosca_document_both():
     assert "node_types" in doc
 
 
+# ── allOf tests ───────────────────────────────────────────────────────────────
+
+def test_allof_inheritance():
+    """allOf with a pure $ref sub-schema maps to derived_from."""
+    schema = {
+        "definitions": {
+            "Base": {"type": "object", "properties": {"id": {"type": "integer"}}},
+            "Child": {
+                "allOf": [
+                    {"$ref": "#/definitions/Base"},
+                    {"properties": {"name": {"type": "string"}}},
+                ]
+            },
+        }
+    }
+    result = c.convert_schema(schema, "top")
+    child = result.data_types["Child"]
+    assert child["derived_from"] == "Base"
+    assert "name" in child["properties"]
+
+
+def test_allof_merges_properties():
+    """allOf without a pure $ref merges all properties into one type."""
+    schema = {
+        "definitions": {
+            "Combined": {
+                "allOf": [
+                    {"properties": {"a": {"type": "string"}}},
+                    {"properties": {"b": {"type": "integer"}}},
+                ]
+            }
+        }
+    }
+    result = c.convert_schema(schema, "top")
+    props = result.data_types["Combined"]["properties"]
+    assert "a" in props
+    assert "b" in props
+
+
+def test_allof_property():
+    """A property schema using allOf with a pure $ref uses the ref type."""
+    schema = {
+        "definitions": {
+            "Addr": {"type": "object", "properties": {"street": {"type": "string"}}},
+            "Person": {
+                "type": "object",
+                "properties": {
+                    "home": {"allOf": [{"$ref": "#/definitions/Addr"}, {"description": "Home address"}]},
+                },
+            },
+        }
+    }
+    result = c.convert_schema(schema, "top")
+    prop = result.data_types["Person"]["properties"]["home"]
+    assert prop["type"] == "Addr"
+    assert prop["description"] == "Home address"
+
+
+def test_allof_required_merged():
+    """required lists from allOf sub-schemas are merged and deduplicated."""
+    schema = {
+        "definitions": {
+            "Doc": {
+                "allOf": [
+                    {"properties": {"a": {"type": "string"}}, "required": ["a"]},
+                    {"properties": {"b": {"type": "string"}}, "required": ["a", "b"]},
+                ]
+            }
+        }
+    }
+    result = c.convert_schema(schema, "top")
+    props = result.data_types["Doc"]["properties"]
+    assert props["a"]["required"] is True
+    assert props["b"]["required"] is True
+
+
 # ── CLI integration tests ─────────────────────────────────────────────────────
 
 @pytest.fixture()

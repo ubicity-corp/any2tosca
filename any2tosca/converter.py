@@ -92,6 +92,46 @@ class Converter:
             return clauses[0]
         return {"$and": clauses}
 
+    def _merge_allof(
+        self,
+        schema: dict[str, Any],
+        root_schema: dict[str, Any],
+    ) -> tuple[dict[str, Any], str | None]:
+        """
+        Flatten ``allOf`` into a single merged schema.
+
+        Returns ``(merged_schema, derived_from)`` where ``derived_from`` is the
+        TOSCA type name of a pure ``$ref`` sub-schema (inheritance), or ``None``.
+        """
+        if "allOf" not in schema:
+            return schema, None
+
+        merged: dict[str, Any] = {k: v for k, v in schema.items() if k != "allOf"}
+        merged_props: dict[str, Any] = dict(merged.pop("properties", {}))
+        merged_required: list[str] = list(merged.pop("required", []))
+        derived_from: str | None = None
+
+        for sub in schema["allOf"]:
+            if "$ref" in sub and len(sub) == 1:
+                # Pure $ref → treat as base type (inheritance)
+                derived_from = self.sanitize_name(sub["$ref"].split("/")[-1])
+            else:
+                resolved = self.resolve_ref(sub["$ref"], root_schema) if "$ref" in sub else sub
+                merged_props.update(resolved.get("properties", {}))
+                merged_required.extend(resolved.get("required", []))
+                for key in ("description", "title", "type"):
+                    if key in resolved and key not in merged:
+                        merged[key] = resolved[key]
+
+        if merged_props:
+            merged["properties"] = merged_props
+        if merged_required:
+            # deduplicate while preserving order
+            seen: set[str] = set()
+            merged["required"] = [r for r in merged_required if not (r in seen or seen.add(r))]  # type: ignore[func-returns-value]
+
+        return merged, derived_from
+
     def collect_definitions(self, root_schema: dict[str, Any]) -> dict[str, Any]:
         """Collect all named sub-schemas from ``definitions`` and ``$defs``."""
         defs: dict[str, Any] = {}
@@ -110,6 +150,20 @@ class Converter:
         data_types: dict[str, Any],
     ) -> dict[str, Any]:
         """Convert a single JSON Schema property definition to a TOSCA property dict."""
+        # allOf → merge sub-schemas first
+        if "allOf" in prop_schema:
+            prop_schema, allof_type = self._merge_allof(prop_schema, root_schema)
+            if allof_type and not prop_schema.get("properties"):
+                prop_def: dict[str, Any] = {"type": allof_type}
+                description = prop_schema.get("description") or prop_schema.get("title")
+                if description:
+                    prop_def["description"] = description
+                prop_def["required"] = prop_name in required_props
+                if "default" in prop_schema:
+                    prop_def["default"] = prop_schema["default"]
+                return prop_def
+            # otherwise fall through with the merged schema
+
         # $ref → use the referenced TOSCA data type name directly
         if "$ref" in prop_schema:
             ref_type_name = self.sanitize_name(prop_schema["$ref"].split("/")[-1])
@@ -187,11 +241,16 @@ class Converter:
         data_types: dict[str, Any],
     ) -> dict[str, Any]:
         """Convert a JSON Schema object definition to a TOSCA ``data_types`` entry."""
+        schema, derived_from = self._merge_allof(schema, root_schema)
+
         tosca_type: dict[str, Any] = {}
 
         description = schema.get("description") or schema.get("title")
         if description:
             tosca_type["description"] = description
+
+        if derived_from:
+            tosca_type["derived_from"] = derived_from
 
         properties_schema = schema.get("properties", {})
         required_list: list[str] = schema.get("required", [])
@@ -223,13 +282,15 @@ class Converter:
         data_types: dict[str, Any],
     ) -> dict[str, Any]:
         """Convert a JSON Schema object definition to a TOSCA ``node_types`` entry."""
+        schema, derived_from = self._merge_allof(schema, root_schema)
+
         node_type: dict[str, Any] = {}
 
         description = schema.get("description") or schema.get("title")
         if description:
             node_type["description"] = description
 
-        node_type["derived_from"] = "tosca.nodes.Root"
+        node_type["derived_from"] = derived_from or "tosca.nodes.Root"
 
         properties_schema = schema.get("properties", {})
         required_list: list[str] = schema.get("required", [])
