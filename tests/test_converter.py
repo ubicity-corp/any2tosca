@@ -416,6 +416,33 @@ def test_anyof_mixed_merges_properties():
     assert "extra" in result.data_types["Extended"]["properties"]
 
 
+def test_anyof_versioned_refs_picks_latest(tmp_path: Path):
+    """anyOf with versioned $refs to the same resource picks the most recent version."""
+    for ver, props in [("v1_0_0", {"id": {"type": "string"}}),
+                       ("v1_2_0", {"id": {"type": "string"}, "name": {"type": "string"}}),
+                       ("v1_1_0", {"id": {"type": "string"}, "desc": {"type": "string"}})]:
+        schema = {"type": "object", "properties": props}
+        (tmp_path / f"Resource.{ver}.json").write_text(
+            json.dumps({"definitions": {"Resource": schema}})
+        )
+
+    schema = {
+        "definitions": {
+            "Thing": {
+                "anyOf": [
+                    {"$ref": f"Resource.{v}.json#/definitions/Resource"}
+                    for v in ("v1_0_0", "v1_2_0", "v1_1_0")
+                ]
+            }
+        }
+    }
+    result = c.convert_schema(schema, "top", base_path=tmp_path)
+    # Should pick v1_2_0 (highest version) — it has both id and name
+    assert result.data_types["Thing"]["derived_from"] == "resource:Resource"
+    assert "resource" in result.imports
+    assert "v1_2_0" in result.imports["resource"]
+
+
 def test_oneof_nullable_flattened():
     """oneOf: [X, {type: null}] is flattened to X (same as anyOf)."""
     schema = {

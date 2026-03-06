@@ -281,6 +281,29 @@ class Converter:
             return clauses[0]
         return {"$and": clauses}
 
+    def _pick_latest_versioned_ref(self, refs: list[str]) -> str | None:
+        """
+        If every ref in *refs* points to a versioned variant of the same base
+        resource (``BaseName.vX_Y_Z`` filename pattern), return the ref with
+        the highest version tuple.  Returns ``None`` if the pattern doesn't
+        match or the refs have different base names.
+        """
+        _VER = re.compile(r"^(.+)\.v(\d+)[._](\d+)[._](\d+)")
+        entries: list[tuple[str, tuple[int, int, int], str]] = []
+        for ref in refs:
+            uri = ref.partition("#")[0]
+            stem = Path(uri.split("/")[-1]).stem   # last path component, no ext
+            m = _VER.match(stem)
+            if not m:
+                return None
+            base = m.group(1)
+            version = (int(m.group(2)), int(m.group(3)), int(m.group(4)))
+            entries.append((base, version, ref))
+        bases = {e[0] for e in entries}
+        if len(bases) != 1:
+            return None
+        return max(entries, key=lambda e: e[1])[2]
+
     def _merge_allof(
         self,
         schema: dict[str, Any],
@@ -320,6 +343,15 @@ class Converter:
                     # Single pure $ref → derived_from
                     return outer, self._ref_to_tosca_type(single["$ref"])
                 return self._merge_allof({**single, **outer}, root_schema)
+
+            # Multiple pure $refs that are versioned variants of the same resource
+            # → pick the most recent version silently
+            pure_refs = [m["$ref"] for m in members if "$ref" in m and len(m) == 1]
+            if len(pure_refs) == len(members):
+                best = self._pick_latest_versioned_ref(pure_refs)
+                if best is not None:
+                    outer = {k: v for k, v in schema.items() if k != keyword}
+                    return outer, self._ref_to_tosca_type(best)
 
         merged: dict[str, Any] = {k: v for k, v in schema.items() if k != keyword}
         merged_props: dict[str, Any] = dict(merged.pop("properties", {}))
