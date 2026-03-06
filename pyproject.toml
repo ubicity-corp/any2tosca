@@ -24,6 +24,7 @@ classifiers = [
 ]
 dependencies = [
     "pyyaml>=6.0",
+    "referencing>=0.28.0",
 ]
 
 [project.optional-dependencies]

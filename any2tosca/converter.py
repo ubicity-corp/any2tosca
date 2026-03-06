@@ -11,6 +11,9 @@ import re
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from referencing import Registry, Resource
+from referencing.jsonschema import DRAFT7
+
 from .yaml_utils import FoldedStr
 
 __all__ = ["Converter", "ConversionResult", "convert_schema", "build_tosca_document"]
@@ -39,7 +42,8 @@ class Converter:
     def __init__(self) -> None:
         self._base_path: Path | None = None
         self._imports: dict[str, str] = {}      # namespace → tosca_file
-        self._id_registry: dict[str, Path] | None = None  # $id URI → local file
+        self._registry: Registry | None = None  # referencing Registry
+        self._id_to_path: dict[str, Path] = {}  # $id URI → local Path
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -47,26 +51,30 @@ class Converter:
         """Make a string safe for use as a TOSCA type / property name."""
         return name.replace(" ", "_").replace("-", "_").replace(".", "_")
 
-    def _get_id_registry(self) -> dict[str, Path]:
+    def _get_registry(self) -> tuple[Registry, dict[str, Path]]:
         """
-        Lazily build a ``{$id URI → local Path}`` registry by scanning all
-        ``.json`` files in ``_base_path`` for their ``$id`` field.
+        Lazily build a ``referencing.Registry`` from all ``.json`` files in
+        ``_base_path`` that declare a ``$id``.  Also returns a
+        ``{$id URI → local Path}`` mapping used for namespace derivation.
         Reset in ``convert_schema`` when ``_base_path`` changes.
         """
-        if self._id_registry is not None:
-            return self._id_registry
-        self._id_registry = {}
-        if self._base_path is None:
-            return self._id_registry
-        for json_file in self._base_path.glob("*.json"):
-            try:
-                with open(json_file, encoding="utf-8") as fh:
-                    schema = json.load(fh)
-                if isinstance(schema, dict) and "$id" in schema:
-                    self._id_registry[schema["$id"]] = json_file
-            except (OSError, json.JSONDecodeError):
-                pass
-        return self._id_registry
+        if self._registry is not None:
+            return self._registry, self._id_to_path
+        self._id_to_path = {}
+        resources: list[tuple[str, Resource]] = []
+        if self._base_path is not None:
+            for json_file in self._base_path.glob("*.json"):
+                try:
+                    with open(json_file, encoding="utf-8") as fh:
+                        schema = json.load(fh)
+                    if isinstance(schema, dict) and "$id" in schema:
+                        uri = schema["$id"]
+                        self._id_to_path[uri] = json_file
+                        resources.append((uri, Resource.from_contents(schema, default_specification=DRAFT7)))
+                except (OSError, json.JSONDecodeError):
+                    pass
+        self._registry = Registry().with_resources(resources)
+        return self._registry, self._id_to_path
 
     def _parse_ref(self, ref: str) -> tuple[str | None, str]:
         """
@@ -82,7 +90,8 @@ class Converter:
 
         if "://" in ref:
             uri_no_frag, _, fragment = ref.partition("#")
-            file_path = self._get_id_registry().get(uri_no_frag)
+            _, id_to_path = self._get_registry()
+            file_path = id_to_path.get(uri_no_frag)
             if file_path is None:
                 return None, ""
             type_name = self.sanitize_name(fragment.split("/")[-1]) if fragment else self.sanitize_name(file_path.stem)
@@ -159,8 +168,10 @@ class Converter:
         """
         Resolve a ``$ref`` to its schema dict.
 
-        Handles local refs (``#/definitions/<name>``, ``#/$defs/<name>``) and,
-        when ``_base_path`` is set, relative file refs.
+        Local ``#/...`` refs are resolved directly against ``root_schema``.
+        External refs (relative or absolute URI) are resolved via the
+        ``referencing`` registry, using the root schema's ``$id`` as the
+        base URI so that relative refs resolve correctly.
         """
         if ref.startswith("#/"):
             parts = ref.lstrip("#/").split("/")
@@ -175,31 +186,14 @@ class Converter:
         if self._base_path is None:
             return {}
 
-        if "://" in ref:
-            uri_no_frag, _, fragment = ref.partition("#")
-            ext_path = self._get_id_registry().get(uri_no_frag)
-            if ext_path is None:
-                return {}
-        else:
-            file_part, _, fragment = ref.partition("#")
-            ext_path = self._base_path / file_part
+        registry, _ = self._get_registry()
+        base_uri = root_schema.get("$id", "")
         try:
-            with open(ext_path, encoding="utf-8") as fh:
-                ext_schema = json.load(fh)
-        except (OSError, json.JSONDecodeError):
+            resolver = registry.resolver(base_uri=base_uri) if base_uri else registry.resolver()
+            contents = resolver.lookup(ref).contents
+            return contents if isinstance(contents, dict) else {}
+        except Exception:
             return {}
-
-        if not fragment:
-            return ext_schema if isinstance(ext_schema, dict) else {}
-
-        parts = fragment.lstrip("/").split("/")
-        node = ext_schema
-        for part in parts:
-            if isinstance(node, dict) and part in node:
-                node = node[part]
-            else:
-                return {}
-        return node if isinstance(node, dict) else {}
 
     def get_tosca_type(
         self,
@@ -482,7 +476,8 @@ class Converter:
             Named tuple with ``data_types``, ``node_types``, and ``imports`` dicts.
         """
         self._base_path = base_path
-        self._id_registry = None  # rebuild for new base_path
+        self._registry = None   # rebuild for new base_path
+        self._id_to_path = {}
         self._imports = {}
         data_types: dict[str, Any] = {}
         node_types: dict[str, Any] = {}
