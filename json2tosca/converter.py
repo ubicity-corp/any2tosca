@@ -90,17 +90,43 @@ def schema_to_property(
     prop_schema: dict[str, Any],
     required_props: list[str],
     root_schema: dict[str, Any],
+    data_types: dict[str, Any],
 ) -> dict[str, Any]:
     """Convert a single JSON Schema property definition to a TOSCA property dict."""
-    # Resolve $ref first, then merge any sibling keywords on top
+    # $ref → use the referenced TOSCA data type name directly
     if "$ref" in prop_schema:
+        ref_type_name = sanitize_name(prop_schema["$ref"].split("/")[-1])
         ref_schema = resolve_ref(prop_schema["$ref"], root_schema)
-        prop_schema = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
+        merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
+        prop_def: dict[str, Any] = {"type": ref_type_name}
+        description = merged.get("description") or merged.get("title")
+        if description:
+            prop_def["description"] = description
+        prop_def["required"] = prop_name in required_props
+        if "default" in merged:
+            prop_def["default"] = merged["default"]
+        return prop_def
 
     json_type = prop_schema.get("type")
+
+    # Inline object with properties → create a named data type and reference it
+    if prop_schema.get("properties") and json_type in ("object", None):
+        nested_type_name = sanitize_name(prop_name)
+        data_types[nested_type_name] = schema_to_tosca_data_type(
+            nested_type_name, prop_schema, root_schema, data_types
+        )
+        prop_def = {"type": nested_type_name}
+        description = prop_schema.get("description") or prop_schema.get("title")
+        if description:
+            prop_def["description"] = description
+        prop_def["required"] = prop_name in required_props
+        if "default" in prop_schema:
+            prop_def["default"] = prop_schema["default"]
+        return prop_def
+
     tosca_type = get_tosca_type(json_type, prop_schema, root_schema)
 
-    prop_def: dict[str, Any] = {"type": tosca_type}
+    prop_def = {"type": tosca_type}
 
     # Description (prefer 'description' over 'title')
     description = prop_schema.get("description") or prop_schema.get("title")
@@ -120,17 +146,19 @@ def schema_to_property(
     if tosca_type == "list":
         items = prop_schema.get("items", {})
         if "$ref" in items:
-            items = resolve_ref(items["$ref"], root_schema)
-        item_tosca_type = get_tosca_type(items.get("type"), items, root_schema)
+            item_tosca_type = sanitize_name(items["$ref"].split("/")[-1])
+        else:
+            item_tosca_type = get_tosca_type(items.get("type"), items, root_schema)
         prop_def["entry_schema"] = {"type": item_tosca_type}
 
-    # entry_schema for map types (additionalProperties)
+    # entry_schema for map types with additionalProperties (no named properties)
     if tosca_type == "map":
         add_props = prop_schema.get("additionalProperties", {})
         if isinstance(add_props, dict):
             if "$ref" in add_props:
-                add_props = resolve_ref(add_props["$ref"], root_schema)
-            val_type = get_tosca_type(add_props.get("type"), add_props, root_schema)
+                val_type = sanitize_name(add_props["$ref"].split("/")[-1])
+            else:
+                val_type = get_tosca_type(add_props.get("type"), add_props, root_schema)
             prop_def["entry_schema"] = {"type": val_type}
 
     return prop_def
@@ -140,6 +168,7 @@ def schema_to_tosca_data_type(
     type_name: str,
     schema: dict[str, Any],
     root_schema: dict[str, Any],
+    data_types: dict[str, Any],
 ) -> dict[str, Any]:
     """Convert a JSON Schema object definition to a TOSCA ``data_types`` entry."""
     tosca_type: dict[str, Any] = {}
@@ -155,7 +184,7 @@ def schema_to_tosca_data_type(
 
     if properties_schema:
         tosca_type["properties"] = {
-            sanitize_name(pname): schema_to_property(pname, pschema, required_list, root_schema)
+            sanitize_name(pname): schema_to_property(pname, pschema, required_list, root_schema, data_types)
             for pname, pschema in properties_schema.items()
         }
 
@@ -203,12 +232,12 @@ def convert_schema(root_schema: dict[str, Any], top_level_name: str) -> dict[str
         if not isinstance(def_schema, dict):
             continue
         tosca_name = sanitize_name(def_name)
-        data_types[tosca_name] = schema_to_tosca_data_type(tosca_name, def_schema, root_schema)
+        data_types[tosca_name] = schema_to_tosca_data_type(tosca_name, def_schema, root_schema, data_types)
 
     # Convert the top-level schema if it is an object
     if root_schema.get("type") == "object" or root_schema.get("properties"):
         safe_top = sanitize_name(top_level_name)
-        data_types[safe_top] = schema_to_tosca_data_type(safe_top, root_schema, root_schema)
+        data_types[safe_top] = schema_to_tosca_data_type(safe_top, root_schema, root_schema, data_types)
 
     return data_types
 

@@ -90,19 +90,19 @@ def test_constraints_empty():
 # ── schema_to_property ────────────────────────────────────────────────────────
 
 def test_property_required():
-    p = schema_to_property("name", {"type": "string"}, ["name"], {})
+    p = schema_to_property("name", {"type": "string"}, ["name"], {}, {})
     assert p["required"] is True
 
 def test_property_optional():
-    p = schema_to_property("name", {"type": "string"}, [], {})
+    p = schema_to_property("name", {"type": "string"}, [], {}, {})
     assert p["required"] is False
 
 def test_property_default():
-    p = schema_to_property("role", {"type": "string", "default": "viewer"}, [], {})
+    p = schema_to_property("role", {"type": "string", "default": "viewer"}, [], {}, {})
     assert p["default"] == "viewer"
 
 def test_property_list_entry_schema():
-    p = schema_to_property("tags", {"type": "array", "items": {"type": "string"}}, [], {})
+    p = schema_to_property("tags", {"type": "array", "items": {"type": "string"}}, [], {}, {})
     assert p["type"] == "list"
     assert p["entry_schema"]["type"] == "string"
 
@@ -112,15 +112,46 @@ def test_property_map_entry_schema():
         {"type": "object", "additionalProperties": {"type": "string"}},
         [],
         {},
+        {},
     )
     assert p["type"] == "map"
     assert p["entry_schema"]["type"] == "string"
 
-def test_property_ref_resolved():
-    root = {"$defs": {"Addr": {"type": "string", "description": "An address"}}}
-    p = schema_to_property("address", {"$ref": "#/$defs/Addr"}, [], root)
-    assert p["type"] == "string"
+def test_property_ref_uses_type_name():
+    root = {"$defs": {"Addr": {"type": "object", "description": "An address"}}}
+    p = schema_to_property("address", {"$ref": "#/$defs/Addr"}, [], root, {})
+    assert p["type"] == "Addr"
     assert p["description"] == "An address"
+
+def test_property_inline_object_creates_data_type():
+    collected: dict = {}
+    p = schema_to_property(
+        "location",
+        {"type": "object", "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}}},
+        [],
+        {},
+        collected,
+    )
+    assert p["type"] == "location"
+    assert "location" in collected
+
+def test_property_list_ref_entry_schema():
+    root = {"$defs": {"Tag": {"type": "string"}}}
+    p = schema_to_property("tags", {"type": "array", "items": {"$ref": "#/$defs/Tag"}}, [], root, {})
+    assert p["type"] == "list"
+    assert p["entry_schema"]["type"] == "Tag"
+
+def test_property_map_ref_entry_schema():
+    root = {"$defs": {"Val": {"type": "string"}}}
+    p = schema_to_property(
+        "lookup",
+        {"type": "object", "additionalProperties": {"$ref": "#/$defs/Val"}},
+        [],
+        root,
+        {},
+    )
+    assert p["type"] == "map"
+    assert p["entry_schema"]["type"] == "Val"
 
 
 # ── convert_schema ────────────────────────────────────────────────────────────
