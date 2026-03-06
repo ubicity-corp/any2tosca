@@ -43,8 +43,8 @@ oas2tosca = "any2tosca.cli:oas_entry"
 yang2tosca = "any2tosca.cli:yang_entry"
 
 [project.urls]
-Homepage = "https://github.com/your-org/any2tosca"
-Issues   = "https://github.com/your-org/any2tosca/issues"
+Homepage = "https://github.com/ubicity-corp/any2tosca"
+Issues   = "https://github.com/ubicity-corp/any2tosca/issues"
 
 [tool.setuptools.packages.find]
 # where = ["src"]
