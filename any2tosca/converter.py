@@ -93,6 +93,11 @@ class Converter:
             uri_no_frag, _, fragment = ref.partition("#")
             _, id_to_path = self._get_registry()
             file_path = id_to_path.get(uri_no_frag)
+            if file_path is None and self._base_path is not None:
+                # Fallback: match by filename when $id doesn't match the URI
+                candidate = self._base_path / Path(uri_no_frag).name
+                if candidate.exists():
+                    file_path = candidate
             if file_path is None:
                 return None, ""
             type_name = self.sanitize_name(fragment.split("/")[-1]) if fragment else self.sanitize_name(file_path.stem)

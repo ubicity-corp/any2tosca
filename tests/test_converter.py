@@ -395,6 +395,28 @@ def test_external_ref_http_uri_unmatched():
     assert result.imports == {}
 
 
+def test_external_ref_http_uri_filename_fallback(tmp_path: Path):
+    """HTTP URI $refs fall back to filename match when $id doesn't match the URI."""
+    # File exists but its $id differs from the URI used in the $ref
+    id_schema = {"$id": "urn:example:different-id", "definitions": {"IdRef": {"type": "string"}}}
+    (tmp_path / "odata-v4.json").write_text(json.dumps(id_schema))
+
+    schema = {
+        "definitions": {
+            "Thing": {
+                "type": "object",
+                "properties": {
+                    "id": {"$ref": "http://redfish.dmtf.org/schemas/v1/odata-v4.json#/definitions/IdRef"},
+                },
+            }
+        }
+    }
+    result = c.convert_schema(schema, "top", base_path=tmp_path)
+    prop = result.data_types["Thing"]["properties"]["id"]
+    assert prop["type"] == "odatav4:IdRef"
+    assert "odatav4" in result.imports
+
+
 def test_build_tosca_document_with_imports():
     """imports dict is rendered as a TOSCA imports list."""
     doc = Converter().build_tosca_document(
