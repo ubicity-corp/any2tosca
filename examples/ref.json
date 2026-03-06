@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.com/multi.schema.json",
+  "$defs": {
+    "address": {
+      "type": "object",
+      "properties": {
+        "street": { "type": "string" },
+        "city": { "type": "string" }
+      },
+      "required": ["street", "city"]
+    },
+    "person": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "age": { "type": "integer" },
+        "homeAddress": { "$ref": "#/$defs/address" }
+      },
+      "required": ["name", "age"]
+    }
+  },
+  "type": "object",
+  "properties": {
+    "people": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/person" }
+    }
+  }
+}

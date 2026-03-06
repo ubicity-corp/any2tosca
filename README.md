@@ -1,51 +1,90 @@
-Convert JSON Schema files to TOSCA Profiles
-===
+# json2tosca
 
-``json2tosca`` converts JSON Schema files to one or more TOSCA
-Profiles. 
+Convert [JSON Schema](https://json-schema.org/) documents to
+[TOSCA](https://docs.oasis-open.org/tosca/TOSCA-Simple-Profile-YAML/v1.3/)
+data types (YAML).
 
-## Installation Instructions
+## Installation
 
-### Setting up the virtual environment
+```bash
+pip install json2tosca
+```
 
-``json2tosca`` is written in Python3.  We recommend that you run the
-``json2tosca`` software in its own virtual environment. Create and
-activate your virtual environment as follows:
+Or install from source:
 
-    python3 -m venv env
-    source env/bin/activate
-    
-``json2tosca`` uses
-[PEP-517](https://www.python.org/dev/peps/pep-0517/) and
-[PEP-518](https://www.python.org/dev/peps/pep-0518/) based
-installation systems that require the latest version of ``pip``. To
-upgrade ``pip`` to the latest version, run the following command in
-your virtual environment:
+```bash
+git clone https://github.com/your-org/json2tosca
+cd json2tosca
+pip install -e ".[dev]"
+```
 
-    pip install -U pip 
+## CLI usage
 
-### Installing the ``json2tosca`` software
+```bash
+# Single file → <name>.tosca.yaml
+json2tosca my_schema.json
 
-The software can be installed directly from the git repository by
-running the following command in your virtual environment:
+# Single file with explicit output path
+json2tosca my_schema.json -o types.yaml
 
-    pip install git+https://github.com/lauwers/json2tosca
-    
-Alternatively, you can also clone the git repo first and then run the
-installer in your local copy as follows:
+# Multiple files merged into one output
+json2tosca a.json b.json -o combined.yaml
 
-    git clone https://github.com/lauwers/json2tosca
-    cd json2tosca
-    pip install . 
-    
-## Using ``json2tosca``
+# Entire directory of .json files
+json2tosca schemas/ -o tosca_types.yaml
 
-To convert an JSON Schema file, run the following command in your virtual environment:
+# Verbose output
+json2tosca schemas/ -v -o tosca_types.yaml
+```
 
-    json2tosca --input <json schema file> --output <TOSCA Profile directory>
-    
-Note that ``json2tosca`` outputs profile *directories* rather than
-profile *CSAR files*, since it is possible that a single JSON Schema
-file can result in the creation of multiple TOSCA profiles.
+## Python API
 
+```python
+import json
+from json2tosca import convert_schema, build_tosca_document
+from json2tosca.yaml_utils import dump_tosca_yaml
 
+with open("my_schema.json") as f:
+    root_schema = json.load(f)
+
+top_name = root_schema.get("title", "MyType")
+data_types = convert_schema(root_schema, top_name)
+tosca_doc  = build_tosca_document(data_types)
+yaml_str   = dump_tosca_yaml(tosca_doc)
+
+print(yaml_str)
+```
+
+## Conversion reference
+
+| JSON Schema keyword | TOSCA equivalent |
+|---|---|
+| `type: string` | `type: string` |
+| `type: integer` | `type: integer` |
+| `type: number` | `type: float` |
+| `type: boolean` | `type: boolean` |
+| `type: object` | `type: map` |
+| `type: array` | `type: list` |
+| `properties` | `properties` |
+| `required` | `required: true/false` per property |
+| `default` | `default` |
+| `description` / `title` | `description` |
+| `minimum` / `maximum` | `greater_or_equal` / `less_or_equal` |
+| `exclusiveMinimum/Maximum` | `greater_than` / `less_than` |
+| `minLength` / `maxLength` | `min_length` / `max_length` |
+| `enum` | `valid_values` |
+| `pattern` | `pattern` |
+| `items` | `entry_schema` |
+| `additionalProperties` | `entry_schema` |
+| `$ref` (local only) | resolved inline |
+| `definitions` / `$defs` | top-level `data_types` entries |
+
+## Running tests
+
+```bash
+pytest
+```
+
+## License
+
+MIT
