@@ -224,7 +224,7 @@ def test_convert_schema_node_type():
     }
     result = convert_schema(schema, "Unused", node_type_names={"Server"})
     assert "Server" in result.node_types
-    assert result.node_types["Server"]["derived_from"] == "tosca.nodes.Root"
+    assert result.node_types["Server"]["derived_from"] == "Root"
     assert "Server" not in result.data_types
     assert "OsConfig" in result.data_types
 
@@ -246,14 +246,14 @@ def test_build_tosca_document_data_types():
     assert "node_types" not in doc
 
 def test_build_tosca_document_node_types():
-    doc = build_tosca_document({}, {"Server": {"derived_from": "tosca.nodes.Root"}})
+    doc = build_tosca_document({}, {"Server": {"derived_from": "Root"}})
     assert "Server" in doc["node_types"]
     assert "data_types" not in doc
 
 def test_build_tosca_document_both():
     doc = build_tosca_document(
         {"Cfg": {}},
-        {"Server": {"derived_from": "tosca.nodes.Root"}},
+        {"Server": {"derived_from": "Root"}},
     )
     assert "data_types" in doc
     assert "node_types" in doc

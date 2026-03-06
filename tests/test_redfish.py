@@ -181,7 +181,7 @@ def test_flat_schema_end_to_end():
     root, node_type_names = n.normalize(REDFISH_FLAT)
     result = Converter().convert_schema(root, "Resource", node_type_names)
     assert "Resource" in result.node_types
-    assert result.node_types["Resource"]["derived_from"] == "tosca.nodes.Root"
+    assert result.node_types["Resource"]["derived_from"] == "Root"
     props = result.node_types["Resource"]["properties"]
     assert "Id" in props
     assert "Name" in props
@@ -194,7 +194,7 @@ def test_end_to_end():
     result = Converter().convert_schema(root, "drive", node_type_names)
 
     assert "Drive" in result.node_types
-    assert result.node_types["Drive"]["derived_from"] == "tosca.nodes.Root"
+    assert result.node_types["Drive"]["derived_from"] == "Root"
     assert "Links" in result.data_types
 
     drive_props = result.node_types["Drive"]["properties"]

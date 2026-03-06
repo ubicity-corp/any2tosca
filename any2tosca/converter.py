@@ -433,7 +433,7 @@ class Converter:
         if description:
             node_type["description"] = FoldedStr(description)
 
-        node_type["derived_from"] = derived_from or "tosca.nodes.Root"
+        node_type["derived_from"] = derived_from or "Root"
 
         properties_schema = schema.get("properties", {})
         required_list: list[str] = schema.get("required", [])
