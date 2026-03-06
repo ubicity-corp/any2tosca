@@ -140,6 +140,53 @@ def test_all_odata_properties_removed_drops_properties_key():
     assert "properties" not in root["definitions"]["ODataOnly"]
 
 
+# ── Flat schema (no definitions section) ─────────────────────────────────────
+
+REDFISH_FLAT = {
+    "$schema": "http://redfish.dmtf.org/schemas/v1/redfish-schema.v1_0_0.json",
+    "$id": "http://example.com/redfish/v1/Resource.json",
+    "title": "#Resource.Resource",
+    "type": "object",
+    "description": "Base Redfish resource",
+    "properties": {
+        "@odata.id":   {"type": "string"},
+        "@odata.type": {"type": "string"},
+        "Id":          {"type": "string"},
+        "Name":        {"type": "string"},
+    },
+    "required": ["Id"],
+}
+
+
+def test_flat_schema_resource_name_from_title():
+    _, node_type_names = n.normalize(REDFISH_FLAT)
+    assert "Resource" in node_type_names
+
+
+def test_flat_schema_odata_properties_removed():
+    root, _ = n.normalize(REDFISH_FLAT)
+    props = root["properties"]
+    assert "@odata.id" not in props
+    assert "@odata.type" not in props
+    assert "Id" in props
+    assert "Name" in props
+
+
+def test_flat_schema_type_preserved():
+    root, _ = n.normalize(REDFISH_FLAT)
+    assert root.get("type") == "object"
+
+
+def test_flat_schema_end_to_end():
+    root, node_type_names = n.normalize(REDFISH_FLAT)
+    result = Converter().convert_schema(root, "Resource", node_type_names)
+    assert "Resource" in result.node_types
+    assert result.node_types["Resource"]["derived_from"] == "tosca.nodes.Root"
+    props = result.node_types["Resource"]["properties"]
+    assert "Id" in props
+    assert "Name" in props
+
+
 # ── End-to-end with Converter ─────────────────────────────────────────────────
 
 def test_end_to_end():

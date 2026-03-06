@@ -202,7 +202,10 @@ def main_redfish(argv: list[str] | None = None) -> int:
             continue
 
         root_schema, node_type_names = normalizer.normalize(redfish_schema)
-        top_name = redfish_schema.get("title") or schema_path.stem
+        # For flat schemas the resource name comes from node_type_names; for
+        # definitions-based schemas top_name is only used as a fallback for
+        # the top-level object (which the converter will ignore anyway).
+        top_name = next(iter(node_type_names), None) or schema_path.stem
         result = converter.convert_schema(root_schema, top_name, node_type_names)
         _report(result, args.verbose, schema_path)
         all_data_types.update(result.data_types)

@@ -42,8 +42,13 @@ class RedfishNormalizer:
         Normalize a Redfish schema into a plain JSON Schema dict and
         a set of definition names that should become TOSCA node types.
 
-        The resource identified by the schema's top-level ``$ref`` is
-        classified as a node type; all other definitions become data types.
+        Two schema layouts are handled:
+
+        - **Definitions-based** (typical): a top-level ``$ref`` names the
+          resource; all types live under ``definitions``.
+        - **Flat** (e.g. ``Resource.json``): properties are defined directly
+          at the top level with no ``definitions`` section. The resource name
+          is derived from the ``title`` field.
 
         Returns
         -------
@@ -51,14 +56,22 @@ class RedfishNormalizer:
             ``(root_schema, node_type_names)`` ready to pass to
             ``Converter.convert_schema()``.
         """
-        resource_name = self._resource_name(redfish_schema)
+        resource_name = self._resource_name(redfish_schema) or self._title_name(redfish_schema)
 
         definitions: dict[str, Any] = {}
         for name, schema in redfish_schema.get("definitions", {}).items():
             if isinstance(schema, dict):
                 definitions[name] = self._normalize_schema(schema)
 
-        root_schema: dict[str, Any] = {"definitions": definitions}
+        if definitions:
+            root_schema: dict[str, Any] = {"definitions": definitions}
+        else:
+            # Flat schema: properties live at the top level — normalize directly.
+            _skip = {"$schema", "$id", "$ref", "title", "definitions", "$defs"}
+            root_schema = self._normalize_schema(
+                {k: v for k, v in redfish_schema.items() if k not in _skip}
+            )
+
         node_type_names: set[str] = {resource_name} if resource_name else set()
         return root_schema, node_type_names
 
@@ -70,6 +83,18 @@ class RedfishNormalizer:
         if ref.startswith("#/definitions/"):
             return ref.split("/")[-1]
         return None
+
+    def _title_name(self, redfish_schema: dict[str, Any]) -> str | None:
+        """
+        Derive a type name from the ``title`` field.
+
+        Redfish titles look like ``"#Resource.Resource"`` or ``"Resource"``.
+        We strip the leading ``#``, then take the last dot-separated segment.
+        """
+        title = redfish_schema.get("title", "").lstrip("#")
+        if not title:
+            return None
+        return title.split(".")[-1] or None
 
     def _normalize_schema(self, schema: dict[str, Any]) -> dict[str, Any]:
         """Normalize a definition schema."""
