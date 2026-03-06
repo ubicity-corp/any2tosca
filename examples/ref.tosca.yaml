@@ -20,10 +20,8 @@ data_types:
         type: integer
         required: true
       homeAddress:
-        type: map
+        type: address
         required: false
-        entry_schema:
-          type: string
   ref:
     derived_from: tosca.datatypes.Root
     properties:
@@ -31,4 +29,4 @@ data_types:
         type: list
         required: false
         entry_schema:
-          type: map
+          type: person

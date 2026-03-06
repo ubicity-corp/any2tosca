@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$defs": {
+    "schemaA": {
+      "$id": "https://example.com/schemaA.json",
+      "type": "string"
+    },
+    "schemaB": {
+      "$id": "https://example.com/schemaB.json",
+      "type": "number"
+    }
+  }
+}

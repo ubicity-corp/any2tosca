@@ -1,0 +1,109 @@
+tosca_definitions_version: tosca_simple_yaml_1_3
+description: Data types generated from JSON Schema by json2tosca
+data_types:
+  href:
+    description: a href resource
+    derived_from: tosca.datatypes.Root
+    properties:
+      href:
+        type: string
+        required: true
+      hints:
+        type: hints
+        description: A resource hint
+        required: false
+  hrefTemplate:
+    description: a href template resource
+    derived_from: tosca.datatypes.Root
+    properties:
+      href_template:
+        type: string
+        required: true
+      href_vars:
+        type: map
+        required: true
+        entry_schema:
+          type: string
+      hints:
+        type: hints
+        description: A resource hint
+        required: false
+  hints:
+    description: A resource hint
+    derived_from: tosca.datatypes.Root
+    properties:
+      allow:
+        type: list
+        description: a list of HTTP methods
+        required: false
+        entry_schema:
+          type: string
+      representations:
+        type: mediaTypeArray
+        description: an array of media types
+        required: false
+      accept_patch:
+        type: mediaTypeArray
+        description: an array of media types
+        required: false
+      accept_post:
+        type: mediaTypeArray
+        description: an array of media types
+        required: false
+      accept_put:
+        type: mediaTypeArray
+        description: an array of media types
+        required: false
+      accept_ranges:
+        type: list
+        required: false
+        entry_schema:
+          type: string
+      prefer:
+        type: list
+        required: false
+        entry_schema:
+          type: string
+      docs:
+        type: string
+        required: false
+      precondition_req:
+        type: list
+        required: false
+        entry_schema:
+          type: string
+      auth_req:
+        type: list
+        required: false
+        entry_schema:
+          type: authReq
+      status:
+        type: string
+        required: false
+        constraints:
+        - valid_values:
+          - deprecated
+          - gone
+  mediaTypeArray:
+    description: an array of media types
+    derived_from: list
+  authReq:
+    derived_from: tosca.datatypes.Root
+    properties:
+      scheme:
+        type: string
+        required: true
+      realms:
+        type: list
+        required: false
+        entry_schema:
+          type: string
+  json_home:
+    description: JSON Home
+    derived_from: tosca.datatypes.Root
+    properties:
+      resource:
+        type: map
+        required: false
+        entry_schema:
+          type: string
