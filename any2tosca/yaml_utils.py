@@ -10,10 +10,14 @@ from typing import Any
 
 import yaml
 
-__all__ = ["dump_tosca_yaml"]
+__all__ = ["dump_tosca_yaml", "FoldedStr"]
 
 
-# ── Custom representer: use literal block style for multi-line strings ─────────
+class FoldedStr(str):
+    """A str subclass that serialises with YAML folded block style (``>``)."""
+
+
+# ── Custom representers ────────────────────────────────────────────────────────
 
 def _str_representer(dumper: yaml.Dumper, data: str) -> yaml.Node:
     if "\n" in data:
@@ -21,8 +25,13 @@ def _str_representer(dumper: yaml.Dumper, data: str) -> yaml.Node:
     return dumper.represent_scalar("tag:yaml.org,2002:str", data)
 
 
+def _folded_str_representer(dumper: yaml.Dumper, data: FoldedStr) -> yaml.Node:
+    return dumper.represent_scalar("tag:yaml.org,2002:str", data, style=">")
+
+
 _dumper = yaml.Dumper
 _dumper.add_representer(str, _str_representer)
+_dumper.add_representer(FoldedStr, _folded_str_representer)
 
 
 def dump_tosca_yaml(data: dict[str, Any]) -> str:

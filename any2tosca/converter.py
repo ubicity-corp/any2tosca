@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any, NamedTuple
 
+from .yaml_utils import FoldedStr
+
 __all__ = ["Converter", "ConversionResult", "convert_schema", "build_tosca_document"]
 
 
@@ -157,7 +159,7 @@ class Converter:
                 prop_def: dict[str, Any] = {"type": allof_type}
                 description = prop_schema.get("description") or prop_schema.get("title")
                 if description:
-                    prop_def["description"] = description
+                    prop_def["description"] = FoldedStr(description)
                 prop_def["required"] = prop_name in required_props
                 if "default" in prop_schema:
                     prop_def["default"] = prop_schema["default"]
@@ -172,7 +174,7 @@ class Converter:
             prop_def: dict[str, Any] = {"type": ref_type_name}
             description = merged.get("description") or merged.get("title")
             if description:
-                prop_def["description"] = description
+                prop_def["description"] = FoldedStr(description)
             prop_def["required"] = prop_name in required_props
             if "default" in merged:
                 prop_def["default"] = merged["default"]
@@ -189,7 +191,7 @@ class Converter:
             prop_def = {"type": nested_type_name}
             description = prop_schema.get("description") or prop_schema.get("title")
             if description:
-                prop_def["description"] = description
+                prop_def["description"] = FoldedStr(description)
             prop_def["required"] = prop_name in required_props
             if "default" in prop_schema:
                 prop_def["default"] = prop_schema["default"]
@@ -201,7 +203,7 @@ class Converter:
         # Description (prefer 'description' over 'title')
         description = prop_schema.get("description") or prop_schema.get("title")
         if description:
-            prop_def["description"] = description
+            prop_def["description"] = FoldedStr(description)
 
         prop_def["required"] = prop_name in required_props
 
@@ -247,7 +249,7 @@ class Converter:
 
         description = schema.get("description") or schema.get("title")
         if description:
-            tosca_type["description"] = description
+            tosca_type["description"] = FoldedStr(description)
 
         if derived_from:
             tosca_type["derived_from"] = derived_from
@@ -288,7 +290,7 @@ class Converter:
 
         description = schema.get("description") or schema.get("title")
         if description:
-            node_type["description"] = description
+            node_type["description"] = FoldedStr(description)
 
         node_type["derived_from"] = derived_from or "tosca.nodes.Root"
 
@@ -360,7 +362,7 @@ class Converter:
         """Wrap type dicts in a full TOSCA service-template skeleton."""
         doc: dict[str, Any] = {
             "tosca_definitions_version": "tosca_2_0",
-            "description": "Types generated from JSON Schema by any2tosca",
+            "description": FoldedStr("Types generated from JSON Schema by any2tosca"),
         }
         if data_types:
             doc["data_types"] = data_types
