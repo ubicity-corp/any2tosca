@@ -179,8 +179,6 @@ class Converter:
         if description:
             tosca_type["description"] = description
 
-        tosca_type["derived_from"] = "tosca.datatypes.Root"
-
         properties_schema = schema.get("properties", {})
         required_list: list[str] = schema.get("required", [])
 
