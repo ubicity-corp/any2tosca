@@ -11,30 +11,25 @@ from pathlib import Path
 import pytest
 import yaml
 
-from json2tosca.converter import (
-    build_tosca_document,
-    convert_schema,
-    resolve_ref,
-    sanitize_name,
-    build_constraints,
-    schema_to_property,
-)
+from json2tosca.converter import Converter, build_tosca_document, convert_schema
 from json2tosca.cli import main
+
+c = Converter()
 
 
 # ── sanitize_name ─────────────────────────────────────────────────────────────
 
 def test_sanitize_name_spaces():
-    assert sanitize_name("my name") == "my_name"
+    assert c.sanitize_name("my name") == "my_name"
 
 def test_sanitize_name_dashes():
-    assert sanitize_name("my-name") == "my_name"
+    assert c.sanitize_name("my-name") == "my_name"
 
 def test_sanitize_name_dots():
-    assert sanitize_name("my.name") == "my_name"
+    assert c.sanitize_name("my.name") == "my_name"
 
 def test_sanitize_name_no_change():
-    assert sanitize_name("myname") == "myname"
+    assert c.sanitize_name("myname") == "myname"
 
 
 # ── resolve_ref ───────────────────────────────────────────────────────────────
@@ -49,65 +44,65 @@ ROOT = {
 }
 
 def test_resolve_ref_defs():
-    assert resolve_ref("#/$defs/Foo", ROOT) == {"type": "string"}
+    assert c.resolve_ref("#/$defs/Foo", ROOT) == {"type": "string"}
 
 def test_resolve_ref_definitions():
-    assert resolve_ref("#/definitions/Bar", ROOT) == {"type": "integer"}
+    assert c.resolve_ref("#/definitions/Bar", ROOT) == {"type": "integer"}
 
 def test_resolve_ref_missing():
-    assert resolve_ref("#/$defs/Missing", ROOT) == {}
+    assert c.resolve_ref("#/$defs/Missing", ROOT) == {}
 
 def test_resolve_ref_external():
-    assert resolve_ref("http://example.com/other.json", ROOT) == {}
+    assert c.resolve_ref("http://example.com/other.json", ROOT) == {}
 
 
 # ── build_constraints ─────────────────────────────────────────────────────────
 
 def test_constraints_numeric():
-    c = build_constraints({"minimum": 1, "maximum": 100})
-    assert {"greater_or_equal": 1} in c
-    assert {"less_or_equal": 100} in c
+    constraints = c.build_constraints({"minimum": 1, "maximum": 100})
+    assert {"greater_or_equal": 1} in constraints
+    assert {"less_or_equal": 100} in constraints
 
 def test_constraints_exclusive():
-    c = build_constraints({"exclusiveMinimum": 0, "exclusiveMaximum": 10})
-    assert {"greater_than": 0} in c
-    assert {"less_than": 10} in c
+    constraints = c.build_constraints({"exclusiveMinimum": 0, "exclusiveMaximum": 10})
+    assert {"greater_than": 0} in constraints
+    assert {"less_than": 10} in constraints
 
 def test_constraints_string():
-    c = build_constraints({"minLength": 2, "maxLength": 50, "pattern": "^[a-z]+$"})
-    assert {"min_length": 2} in c
-    assert {"max_length": 50} in c
-    assert {"pattern": "^[a-z]+$"} in c
+    constraints = c.build_constraints({"minLength": 2, "maxLength": 50, "pattern": "^[a-z]+$"})
+    assert {"min_length": 2} in constraints
+    assert {"max_length": 50} in constraints
+    assert {"pattern": "^[a-z]+$"} in constraints
 
 def test_constraints_enum():
-    c = build_constraints({"enum": ["a", "b", "c"]})
-    assert {"valid_values": ["a", "b", "c"]} in c
+    constraints = c.build_constraints({"enum": ["a", "b", "c"]})
+    assert {"valid_values": ["a", "b", "c"]} in constraints
 
 def test_constraints_empty():
-    assert build_constraints({}) == []
+    assert c.build_constraints({}) == []
 
 
 # ── schema_to_property ────────────────────────────────────────────────────────
 
 def test_property_required():
-    p = schema_to_property("name", {"type": "string"}, ["name"], {}, {})
+    p = c.schema_to_property("name", {"type": "string"}, ["name"], {}, {})
     assert p["required"] is True
 
 def test_property_optional():
-    p = schema_to_property("name", {"type": "string"}, [], {}, {})
+    p = c.schema_to_property("name", {"type": "string"}, [], {}, {})
     assert p["required"] is False
 
 def test_property_default():
-    p = schema_to_property("role", {"type": "string", "default": "viewer"}, [], {}, {})
+    p = c.schema_to_property("role", {"type": "string", "default": "viewer"}, [], {}, {})
     assert p["default"] == "viewer"
 
 def test_property_list_entry_schema():
-    p = schema_to_property("tags", {"type": "array", "items": {"type": "string"}}, [], {}, {})
+    p = c.schema_to_property("tags", {"type": "array", "items": {"type": "string"}}, [], {}, {})
     assert p["type"] == "list"
     assert p["entry_schema"]["type"] == "string"
 
 def test_property_map_entry_schema():
-    p = schema_to_property(
+    p = c.schema_to_property(
         "meta",
         {"type": "object", "additionalProperties": {"type": "string"}},
         [],
@@ -119,13 +114,13 @@ def test_property_map_entry_schema():
 
 def test_property_ref_uses_type_name():
     root = {"$defs": {"Addr": {"type": "object", "description": "An address"}}}
-    p = schema_to_property("address", {"$ref": "#/$defs/Addr"}, [], root, {})
+    p = c.schema_to_property("address", {"$ref": "#/$defs/Addr"}, [], root, {})
     assert p["type"] == "Addr"
     assert p["description"] == "An address"
 
 def test_property_inline_object_creates_data_type():
     collected: dict = {}
-    p = schema_to_property(
+    p = c.schema_to_property(
         "location",
         {"type": "object", "properties": {"lat": {"type": "number"}, "lon": {"type": "number"}}},
         [],
@@ -137,13 +132,13 @@ def test_property_inline_object_creates_data_type():
 
 def test_property_list_ref_entry_schema():
     root = {"$defs": {"Tag": {"type": "string"}}}
-    p = schema_to_property("tags", {"type": "array", "items": {"$ref": "#/$defs/Tag"}}, [], root, {})
+    p = c.schema_to_property("tags", {"type": "array", "items": {"$ref": "#/$defs/Tag"}}, [], root, {})
     assert p["type"] == "list"
     assert p["entry_schema"]["type"] == "Tag"
 
 def test_property_map_ref_entry_schema():
     root = {"$defs": {"Val": {"type": "string"}}}
-    p = schema_to_property(
+    p = c.schema_to_property(
         "lookup",
         {"type": "object", "additionalProperties": {"$ref": "#/$defs/Val"}},
         [],
