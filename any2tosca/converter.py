@@ -287,23 +287,61 @@ class Converter:
         root_schema: dict[str, Any],
     ) -> tuple[dict[str, Any], str | None]:
         """
-        Flatten ``allOf`` into a single merged schema.
+        Flatten ``allOf``, ``anyOf``, or ``oneOf`` into a single merged schema.
 
         Returns ``(merged_schema, derived_from)`` where ``derived_from`` is the
-        TOSCA type name of a pure ``$ref`` sub-schema (inheritance), or ``None``.
+        TOSCA type name of the first pure ``$ref`` sub-schema (inheritance), or
+        ``None``.
+
+        ``anyOf`` / ``oneOf`` handling:
+
+        - Null-only members are stripped first.
+        - If a single non-null member remains it is flattened (nullable pattern).
+        - Multiple pure ``$ref`` members: first becomes ``derived_from``; the
+          rest have their properties merged in and a warning is emitted.
+        - Mixed members (refs + inline schemas): same merge as ``allOf``.
         """
-        if "allOf" not in schema:
+        keyword = next((k for k in ("allOf", "anyOf", "oneOf") if k in schema), None)
+        if keyword is None:
             return schema, None
 
-        merged: dict[str, Any] = {k: v for k, v in schema.items() if k != "allOf"}
+        members: list[dict[str, Any]] = list(schema[keyword])
+
+        # anyOf / oneOf: strip null-only members; flatten if one remains
+        if keyword in ("anyOf", "oneOf"):
+            non_null = [m for m in members
+                        if not (isinstance(m, dict) and m.get("type") == "null")]
+            if non_null:
+                members = non_null
+            if len(members) == 1:
+                outer = {k: v for k, v in schema.items() if k != keyword}
+                single = members[0]
+                if "$ref" in single and len(single) == 1:
+                    # Single pure $ref → derived_from
+                    return outer, self._ref_to_tosca_type(single["$ref"])
+                return self._merge_allof({**single, **outer}, root_schema)
+
+        merged: dict[str, Any] = {k: v for k, v in schema.items() if k != keyword}
         merged_props: dict[str, Any] = dict(merged.pop("properties", {}))
         merged_required: list[str] = list(merged.pop("required", []))
         derived_from: str | None = None
 
-        for sub in schema["allOf"]:
+        for sub in members:
             if "$ref" in sub and len(sub) == 1:
-                # Pure $ref → treat as base type (inheritance)
-                derived_from = self._ref_to_tosca_type(sub["$ref"])
+                if derived_from is None:
+                    # First pure $ref → base type
+                    derived_from = self._ref_to_tosca_type(sub["$ref"])
+                else:
+                    # Additional pure $refs (anyOf/oneOf union) — merge properties
+                    if keyword in ("anyOf", "oneOf"):
+                        print(
+                            f"Warning: {keyword} has multiple $ref alternatives — "
+                            f"merging '{sub['$ref']}' properties; semantic union is lost",
+                            file=sys.stderr,
+                        )
+                    resolved = self.resolve_ref(sub["$ref"], root_schema)
+                    merged_props.update(resolved.get("properties", {}))
+                    merged_required.extend(resolved.get("required", []))
             else:
                 resolved = self.resolve_ref(sub["$ref"], root_schema) if "$ref" in sub else sub
                 merged_props.update(resolved.get("properties", {}))
@@ -315,7 +353,6 @@ class Converter:
         if merged_props:
             merged["properties"] = merged_props
         if merged_required:
-            # deduplicate while preserving order
             seen: set[str] = set()
             merged["required"] = [r for r in merged_required if not (r in seen or seen.add(r))]  # type: ignore[func-returns-value]
 
@@ -339,8 +376,8 @@ class Converter:
         data_types: dict[str, Any],
     ) -> dict[str, Any]:
         """Convert a single JSON Schema property definition to a TOSCA property dict."""
-        # allOf → merge sub-schemas first
-        if "allOf" in prop_schema:
+        # allOf / anyOf / oneOf → merge sub-schemas first
+        if any(k in prop_schema for k in ("allOf", "anyOf", "oneOf")):
             prop_schema, allof_type = self._merge_allof(prop_schema, root_schema)
             if allof_type and not prop_schema.get("properties"):
                 prop_def: dict[str, Any] = {"type": allof_type}

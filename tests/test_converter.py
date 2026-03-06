@@ -335,6 +335,103 @@ def test_allof_required_merged():
     assert props["b"]["required"] is True
 
 
+# ── anyOf / oneOf tests ───────────────────────────────────────────────────────
+
+def test_anyof_nullable_flattened():
+    """anyOf: [X, {type: null}] is flattened to X."""
+    schema = {
+        "definitions": {
+            "Thing": {
+                "type": "object",
+                "properties": {
+                    "name": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                },
+            }
+        }
+    }
+    result = convert_schema(schema, "top")
+    assert result.data_types["Thing"]["properties"]["name"]["type"] == "string"
+
+
+def test_anyof_single_ref_becomes_type():
+    """anyOf with one non-null $ref is treated like a bare $ref."""
+    schema = {
+        "definitions": {
+            "Tag": {"type": "string"},
+            "Thing": {
+                "type": "object",
+                "properties": {
+                    "tag": {"anyOf": [{"$ref": "#/definitions/Tag"}, {"type": "null"}]},
+                },
+            },
+        }
+    }
+    result = convert_schema(schema, "top")
+    assert result.data_types["Thing"]["properties"]["tag"]["type"] == "Tag"
+
+
+def test_anyof_pure_ref_becomes_derived_from():
+    """anyOf with a single pure $ref at the type level becomes derived_from."""
+    schema = {
+        "definitions": {
+            "Base": {"type": "object", "properties": {"id": {"type": "string"}}},
+            "Child": {"anyOf": [{"$ref": "#/definitions/Base"}]},
+        }
+    }
+    result = convert_schema(schema, "top")
+    assert result.data_types["Child"]["derived_from"] == "Base"
+
+
+def test_anyof_multiple_refs_merges_properties(capsys):
+    """anyOf with multiple $refs: first becomes derived_from, rest are merged."""
+    schema = {
+        "definitions": {
+            "A": {"type": "object", "properties": {"x": {"type": "string"}}},
+            "B": {"type": "object", "properties": {"y": {"type": "integer"}}},
+            "AB": {"anyOf": [{"$ref": "#/definitions/A"}, {"$ref": "#/definitions/B"}]},
+        }
+    }
+    result = convert_schema(schema, "top")
+    assert result.data_types["AB"]["derived_from"] == "A"
+    assert "y" in result.data_types["AB"]["properties"]
+    captured = capsys.readouterr()
+    assert "anyOf" in captured.err
+
+
+def test_anyof_mixed_merges_properties():
+    """anyOf with $ref + inline properties: ref → derived_from, props merged."""
+    schema = {
+        "definitions": {
+            "Base": {"type": "object", "properties": {"id": {"type": "string"}}},
+            "Extended": {
+                "anyOf": [
+                    {"$ref": "#/definitions/Base"},
+                    {"type": "object", "properties": {"extra": {"type": "boolean"}}},
+                ]
+            },
+        }
+    }
+    result = convert_schema(schema, "top")
+    assert result.data_types["Extended"]["derived_from"] == "Base"
+    assert "extra" in result.data_types["Extended"]["properties"]
+
+
+def test_oneof_nullable_flattened():
+    """oneOf: [X, {type: null}] is flattened to X (same as anyOf)."""
+    schema = {
+        "definitions": {
+            "Thing": {
+                "type": "object",
+                "properties": {
+                    "count": {"oneOf": [{"type": "integer"}, {"type": "null"}]},
+                },
+            }
+        }
+    }
+    result = convert_schema(schema, "top")
+    assert result.data_types["Thing"]["properties"]["count"]["type"] == "integer"
+
+
 # ── External $ref tests ───────────────────────────────────────────────────────
 
 def test_external_ref_property_type(tmp_path: Path):
