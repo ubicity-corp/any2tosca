@@ -1,0 +1,136 @@
+"""
+redfish.py
+----------
+Pre-processor that normalizes Redfish JSON Schema for use with the Converter.
+"""
+
+from __future__ import annotations
+
+import copy
+from typing import Any
+
+__all__ = ["RedfishNormalizer"]
+
+
+class RedfishNormalizer:
+    """
+    Normalizes a Redfish JSON Schema document into plain JSON Schema.
+
+    Redfish quirks handled:
+
+    - The top-level ``$ref`` identifies the resource type → becomes a node type.
+    - ``anyOf: [{$ref: ...}, {type: null}]`` → flattened to the non-null schema.
+    - ``@odata.*`` and ``@Redfish.*`` properties are dropped.
+    - ``x-longDescription`` is promoted to ``description`` when no description
+      is present.
+    - All other ``x-*`` extension keywords are dropped.
+    - External ``$ref`` URIs are left as-is; the converter treats them as
+      unresolvable and skips them gracefully.
+
+    Usage::
+
+        normalizer = RedfishNormalizer()
+        root_schema, node_type_names = normalizer.normalize(redfish_schema)
+        result = Converter().convert_schema(root_schema, "api", node_type_names)
+    """
+
+    #: Property name prefixes that are Redfish/OData annotations, not data.
+    EXCLUDED_PREFIXES: tuple[str, ...] = ("@odata.", "@Redfish.")
+
+    def normalize(self, redfish_schema: dict[str, Any]) -> tuple[dict[str, Any], set[str]]:
+        """
+        Normalize a Redfish schema into a plain JSON Schema dict and
+        a set of definition names that should become TOSCA node types.
+
+        The resource identified by the schema's top-level ``$ref`` is
+        classified as a node type; all other definitions become data types.
+
+        Returns
+        -------
+        tuple[dict, set[str]]
+            ``(root_schema, node_type_names)`` ready to pass to
+            ``Converter.convert_schema()``.
+        """
+        resource_name = self._resource_name(redfish_schema)
+
+        definitions: dict[str, Any] = {}
+        for name, schema in redfish_schema.get("definitions", {}).items():
+            if isinstance(schema, dict):
+                definitions[name] = self._normalize_schema(schema)
+
+        root_schema: dict[str, Any] = {"definitions": definitions}
+        node_type_names: set[str] = {resource_name} if resource_name else set()
+        return root_schema, node_type_names
+
+    # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _resource_name(self, redfish_schema: dict[str, Any]) -> str | None:
+        """Return the definition name pointed to by the top-level ``$ref``."""
+        ref = redfish_schema.get("$ref", "")
+        if ref.startswith("#/definitions/"):
+            return ref.split("/")[-1]
+        return None
+
+    def _normalize_schema(self, schema: dict[str, Any]) -> dict[str, Any]:
+        """Normalize a definition schema."""
+        schema = copy.deepcopy(schema)
+
+        # Promote x-longDescription to description
+        if "description" not in schema and "x-longDescription" in schema:
+            schema["description"] = schema["x-longDescription"]
+
+        # Drop all x-* extension keywords
+        schema = {k: v for k, v in schema.items() if not k.startswith("x-")}
+
+        if "properties" in schema:
+            schema["properties"] = self._normalize_properties(schema["properties"])
+            if not schema["properties"]:
+                del schema["properties"]
+
+        if "items" in schema:
+            schema["items"] = self._normalize_property_schema(schema["items"])
+
+        if isinstance(schema.get("additionalProperties"), dict):
+            schema["additionalProperties"] = self._normalize_property_schema(
+                schema["additionalProperties"]
+            )
+
+        return schema
+
+    def _normalize_properties(self, properties: dict[str, Any]) -> dict[str, Any]:
+        """Filter and normalize a properties dict."""
+        result: dict[str, Any] = {}
+        for name, prop_schema in properties.items():
+            if any(name.startswith(prefix) for prefix in self.EXCLUDED_PREFIXES):
+                continue
+            result[name] = self._normalize_property_schema(prop_schema)
+        return result
+
+    def _normalize_property_schema(self, schema: Any) -> Any:
+        """Normalize a property schema, flattening anyOf/null patterns."""
+        if not isinstance(schema, dict):
+            return schema
+
+        # Flatten anyOf: [{...}, {type: null}] → the non-null alternative
+        if "anyOf" in schema:
+            non_null = [
+                s for s in schema["anyOf"]
+                if not (isinstance(s, dict) and s.get("type") == "null")
+            ]
+            if len(non_null) == 1:
+                merged = {**non_null[0], **{k: v for k, v in schema.items() if k != "anyOf"}}
+                return self._normalize_property_schema(merged)
+
+        # Promote x-longDescription
+        if "description" not in schema and "x-longDescription" in schema:
+            schema = dict(schema)
+            schema["description"] = schema["x-longDescription"]
+
+        # Drop x-* extensions
+        schema = {k: v for k, v in schema.items() if not k.startswith("x-")}
+
+        # Recurse into nested properties
+        if "properties" in schema:
+            schema["properties"] = self._normalize_properties(schema["properties"])
+
+        return schema
