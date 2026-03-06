@@ -423,11 +423,12 @@ def tmp_schema(tmp_path: Path) -> Path:
 
 
 def test_cli_single_file(tmp_schema: Path, tmp_path: Path):
-    out = tmp_path / "out.yaml"
-    rc = main_json([str(tmp_schema), "-o", str(out)])
+    out_dir = tmp_path / "out"
+    rc = main_json([str(tmp_schema), "-o", str(out_dir)])
     assert rc == 0
-    assert out.exists()
-    doc = yaml.safe_load(out.read_text())
+    out_file = out_dir / "widget.yaml"
+    assert out_file.exists()
+    doc = yaml.safe_load(out_file.read_text())
     assert "Widget" in doc["data_types"]
 
 
@@ -439,12 +440,21 @@ def test_cli_directory(tmp_path: Path):
              "properties": {"x": {"type": "string"}}}
         (schema_dir / f"{name}.json").write_text(json.dumps(s))
 
-    out = tmp_path / "combined.yaml"
-    rc = main_json([str(schema_dir), "-o", str(out)])
+    out_dir = tmp_path / "out"
+    rc = main_json([str(schema_dir), "-o", str(out_dir)])
     assert rc == 0
-    doc = yaml.safe_load(out.read_text())
-    assert "Alpha" in doc["data_types"]
-    assert "Beta" in doc["data_types"]
+    # Each input file produces its own TOSCA file
+    alpha_doc = yaml.safe_load((out_dir / "alpha.yaml").read_text())
+    beta_doc  = yaml.safe_load((out_dir / "beta.yaml").read_text())
+    assert "Alpha" in alpha_doc["data_types"]
+    assert "Beta"  in beta_doc["data_types"]
+
+
+def test_cli_default_output_dir(tmp_schema: Path, tmp_path: Path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    rc = main_json([str(tmp_schema)])
+    assert rc == 0
+    assert (tmp_path / "tosca" / "widget.yaml").exists()
 
 
 def test_cli_no_files(tmp_path: Path):
@@ -455,6 +465,6 @@ def test_cli_no_files(tmp_path: Path):
 def test_cli_bad_json(tmp_path: Path):
     bad = tmp_path / "bad.json"
     bad.write_text("{ not valid json }")
-    out = tmp_path / "out.yaml"
-    rc = main_json([str(bad), "-o", str(out)])
+    out_dir = tmp_path / "out"
+    rc = main_json([str(bad), "-o", str(out_dir)])
     assert rc != 0

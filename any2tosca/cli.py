@@ -40,12 +40,8 @@ def _make_parser(prog: str, description: str, epilog: str) -> argparse.ArgumentP
     parser.add_argument(
         "-o", "--output",
         default=None,
-        metavar="OUTPUT",
-        help=(
-            "Output YAML file. "
-            "Defaults to <input_stem>.tosca.yaml for a single file, "
-            "or tosca_types.yaml for multiple files."
-        ),
+        metavar="OUTPUT_DIR",
+        help="Output directory for TOSCA files (default: tosca/).",
     )
     parser.add_argument(
         "-v", "--verbose",
@@ -91,26 +87,12 @@ def _report(result: ConversionResult, verbose: bool, path: Path) -> None:
         print(f"  ✓  {total} type(s): {', '.join(names)}")
 
 
-def _write_output(
-    all_data_types: dict,
-    all_node_types: dict,
-    all_imports: dict,
-    input_files: list[Path],
-    args: argparse.Namespace,
-) -> None:
-    tosca_doc = build_tosca_document(all_data_types, all_node_types, all_imports or None)
-    yaml_output = dump_tosca_yaml(tosca_doc)
-
-    if args.output:
-        out_path = Path(args.output)
-    elif len(input_files) == 1:
-        out_path = input_files[0].with_suffix(".tosca.yaml")
-    else:
-        out_path = Path("tosca_types.yaml")
-
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(yaml_output, encoding="utf-8")
-    print(f"\n✅  TOSCA output written to: {out_path}")
+def _write_file(result: ConversionResult, input_path: Path, out_dir: Path) -> Path:
+    """Write a single ConversionResult to <out_dir>/<input_stem>.tosca.yaml."""
+    tosca_doc = build_tosca_document(result.data_types, result.node_types, result.imports or None)
+    out_path = out_dir / input_path.with_suffix(".yaml").name
+    out_path.write_text(dump_tosca_yaml(tosca_doc), encoding="utf-8")
+    return out_path
 
 
 # ── any2tosca ────────────────────────────────────────────────────────────────
@@ -122,8 +104,8 @@ def main_json(argv: list[str] | None = None) -> int:
         "Convert JSON Schema files to TOSCA data types (YAML).",
         "Examples:\n"
         "  any2tosca my_schema.json\n"
-        "  any2tosca schemas/ -o tosca_types.yaml\n"
-        "  any2tosca a.json b.json -o combined.yaml",
+        "  any2tosca schemas/ -o output/\n"
+        "  any2tosca a.json b.json -o output/",
     )
     args = parser.parse_args(argv)
     input_files = _collect_input_files(args.inputs, (".json",))
@@ -132,16 +114,15 @@ def main_json(argv: list[str] | None = None) -> int:
         print("Error: no JSON Schema files found.", file=sys.stderr)
         return 1
 
-    all_data_types: dict = {}
-    all_node_types: dict = {}
-    all_imports: dict = {}
-    errors = 0
+    out_dir = Path(args.output) if args.output else Path("tosca")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = errors = 0
 
     for schema_path in input_files:
         try:
             root_schema = _load_file(schema_path)
         except (json.JSONDecodeError, yaml.YAMLError) as exc:
-            print(f"  ✗ Parse error: {exc}", file=sys.stderr)
+            print(f"  ✗ Parse error in {schema_path.name}: {exc}", file=sys.stderr)
             errors += 1
             continue
         except OSError as exc:
@@ -152,16 +133,16 @@ def main_json(argv: list[str] | None = None) -> int:
         top_name = root_schema.get("title") or schema_path.stem
         result = convert_schema(root_schema, top_name, base_path=schema_path.parent)
         _report(result, args.verbose, schema_path)
-        all_data_types.update(result.data_types)
-        all_node_types.update(result.node_types)
-        all_imports.update(result.imports)
+        if not result.data_types and not result.node_types:
+            continue
+        out_path = _write_file(result, schema_path, out_dir)
+        print(f"  → {out_path}")
+        written += 1
 
-    if not all_data_types and not all_node_types:
-        print("No types were generated.", file=sys.stderr)
+    if written == 0:
+        print("No TOSCA files were written.", file=sys.stderr)
         return 1
-
-    _write_output(all_data_types, all_node_types, all_imports, input_files, args)
-
+    print(f"\n✅  {written} file(s) written to: {out_dir}/")
     if errors:
         print(f"⚠   {errors} file(s) had errors and were skipped.", file=sys.stderr)
         return 2
@@ -177,7 +158,7 @@ def main_redfish(argv: list[str] | None = None) -> int:
         "Convert Redfish JSON Schema files to TOSCA node and data types (YAML).",
         "Examples:\n"
         "  redfish2tosca Drive.json\n"
-        "  redfish2tosca schemas/ -o redfish.tosca.yaml",
+        "  redfish2tosca schemas/ -o tosca/",
     )
     args = parser.parse_args(argv)
     input_files = _collect_input_files(args.inputs, (".json",))
@@ -186,18 +167,17 @@ def main_redfish(argv: list[str] | None = None) -> int:
         print("Error: no Redfish JSON Schema files found.", file=sys.stderr)
         return 1
 
+    out_dir = Path(args.output) if args.output else Path("tosca")
+    out_dir.mkdir(parents=True, exist_ok=True)
     normalizer = RedfishNormalizer()
     converter = Converter()
-    all_data_types: dict = {}
-    all_node_types: dict = {}
-    all_imports: dict = {}
-    errors = 0
+    written = errors = 0
 
     for schema_path in input_files:
         try:
             redfish_schema = _load_file(schema_path)
         except (json.JSONDecodeError, yaml.YAMLError) as exc:
-            print(f"  ✗ Parse error: {exc}", file=sys.stderr)
+            print(f"  ✗ Parse error in {schema_path.name}: {exc}", file=sys.stderr)
             errors += 1
             continue
         except OSError as exc:
@@ -206,22 +186,19 @@ def main_redfish(argv: list[str] | None = None) -> int:
             continue
 
         root_schema, node_type_names = normalizer.normalize(redfish_schema)
-        # For flat schemas the resource name comes from node_type_names; for
-        # definitions-based schemas top_name is only used as a fallback for
-        # the top-level object (which the converter will ignore anyway).
         top_name = next(iter(node_type_names), None) or schema_path.stem
         result = converter.convert_schema(root_schema, top_name, node_type_names, base_path=schema_path.parent)
         _report(result, args.verbose, schema_path)
-        all_data_types.update(result.data_types)
-        all_node_types.update(result.node_types)
-        all_imports.update(result.imports)
+        if not result.data_types and not result.node_types:
+            continue
+        out_path = _write_file(result, schema_path, out_dir)
+        print(f"  → {out_path}")
+        written += 1
 
-    if not all_data_types and not all_node_types:
-        print("No types were generated.", file=sys.stderr)
+    if written == 0:
+        print("No TOSCA files were written.", file=sys.stderr)
         return 1
-
-    _write_output(all_data_types, all_node_types, all_imports, input_files, args)
-
+    print(f"\n✅  {written} file(s) written to: {out_dir}/")
     if errors:
         print(f"⚠   {errors} file(s) had errors and were skipped.", file=sys.stderr)
         return 2
@@ -237,8 +214,8 @@ def main_oas(argv: list[str] | None = None) -> int:
         "Convert OpenAPI 2.0/3.x documents to TOSCA node and data types (YAML).",
         "Examples:\n"
         "  oas2tosca api.yaml\n"
-        "  oas2tosca api.json -o api.tosca.yaml\n"
-        "  oas2tosca specs/ -o combined.tosca.yaml",
+        "  oas2tosca api.json -o output/\n"
+        "  oas2tosca specs/ -o output/",
     )
     args = parser.parse_args(argv)
     input_files = _collect_input_files(args.inputs, (".json", ".yaml", ".yml"))
@@ -247,18 +224,17 @@ def main_oas(argv: list[str] | None = None) -> int:
         print("Error: no OpenAPI files found.", file=sys.stderr)
         return 1
 
+    out_dir = Path(args.output) if args.output else Path("tosca")
+    out_dir.mkdir(parents=True, exist_ok=True)
     extractor = OpenAPIExtractor()
     converter = Converter()
-    all_data_types: dict = {}
-    all_node_types: dict = {}
-    all_imports: dict = {}
-    errors = 0
+    written = errors = 0
 
     for api_path in input_files:
         try:
             openapi_doc = _load_file(api_path)
         except (json.JSONDecodeError, yaml.YAMLError) as exc:
-            print(f"  ✗ Parse error: {exc}", file=sys.stderr)
+            print(f"  ✗ Parse error in {api_path.name}: {exc}", file=sys.stderr)
             errors += 1
             continue
         except OSError as exc:
@@ -267,22 +243,19 @@ def main_oas(argv: list[str] | None = None) -> int:
             continue
 
         root_schema, node_type_names = extractor.extract(openapi_doc)
-        top_name = (
-            openapi_doc.get("info", {}).get("title")
-            or api_path.stem
-        )
+        top_name = openapi_doc.get("info", {}).get("title") or api_path.stem
         result = converter.convert_schema(root_schema, top_name, node_type_names, base_path=api_path.parent)
         _report(result, args.verbose, api_path)
-        all_data_types.update(result.data_types)
-        all_node_types.update(result.node_types)
-        all_imports.update(result.imports)
+        if not result.data_types and not result.node_types:
+            continue
+        out_path = _write_file(result, api_path, out_dir)
+        print(f"  → {out_path}")
+        written += 1
 
-    if not all_data_types and not all_node_types:
-        print("No types were generated.", file=sys.stderr)
+    if written == 0:
+        print("No TOSCA files were written.", file=sys.stderr)
         return 1
-
-    _write_output(all_data_types, all_node_types, all_imports, input_files, args)
-
+    print(f"\n✅  {written} file(s) written to: {out_dir}/")
     if errors:
         print(f"⚠   {errors} file(s) had errors and were skipped.", file=sys.stderr)
         return 2
