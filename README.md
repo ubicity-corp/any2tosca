@@ -151,6 +151,9 @@ print(dump_tosca_yaml(build_tosca_document(result.data_types, result.node_types)
 | `$ref` (external file) | `namespace:TypeName` + `imports` entry |
 | `allOf` with single `$ref` | `derived_from` |
 | `allOf` with mixed schemas | merged properties |
+| `anyOf` / `oneOf` with null alternative | flattened to non-null member |
+| `anyOf` / `oneOf` with single `$ref` | `derived_from` |
+| `anyOf` / `oneOf` with multiple members | first `$ref` → `derived_from`, rest merged |
 | `definitions` / `$defs` | top-level `data_types` entries |
 
 Scalar/enum definitions derive from the corresponding TOSCA primitive type.
