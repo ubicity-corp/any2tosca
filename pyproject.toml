@@ -36,6 +36,8 @@ dev = [
 
 [project.scripts]
 json2tosca = "json2tosca.cli:cli_entry"
+redfish2tosca = "json2tosca.cli:redfish_entry"
+oas2tosca = "json2tosca.cli:oas_entry"
 
 [project.urls]
 Homepage = "https://github.com/your-org/json2tosca"
