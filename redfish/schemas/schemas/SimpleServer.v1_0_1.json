@@ -1,0 +1,78 @@
+{
+  "$schema": "http://redfish.dmtf.org/schemas/v1/redfish-schema.v1_0_0.json",
+  "$id": "http://example.com/redfish/v1/SimpleServer.v1_0_1.json",
+  "title": "#SimpleServer.v1_0_1.SimpleServer",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "http://example.com/redfish/v1/Resource.json"
+    },
+    {
+      "type": "object",
+      "properties": {
+        "PowerState": {
+          "type": "string",
+          "enum": [
+            "On",
+            "Off",
+            "PoweringOn",
+            "PoweringOff"
+          ]
+        },
+        "ProcessorCount": {
+          "type": "integer"
+        },
+        "MemoryGB": {
+          "type": "number"
+        },
+        "Status": {
+          "$ref": "http://example.com/redfish/v1/Status.v1_0_0.json"
+        },
+        "NetworkInterfaces": {
+          "type": "array",
+          "items": {
+            "$ref": "http://example.com/redfish/v1/NetworkInterface.v1_0_0.json"
+          }
+        },
+        "Links": {
+          "type": "object",
+          "description": "References to related resources",
+          "properties": {
+            "Chassis": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "@odata.id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "@odata.id"
+                ]
+              }
+            },
+            "ManagedBy": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "@odata.id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "@odata.id"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "required": [
+    "Id",
+    "Name"
+  ]
+}
