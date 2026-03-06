@@ -1,9 +1,8 @@
-tosca_definitions_version: tosca_simple_yaml_1_3
-description: Data types generated from JSON Schema by json2tosca
+tosca_definitions_version: tosca_2_0
+description: Types generated from JSON Schema by json2tosca
 data_types:
   href:
     description: a href resource
-    derived_from: tosca.datatypes.Root
     properties:
       href:
         type: string
@@ -14,7 +13,6 @@ data_types:
         required: false
   hrefTemplate:
     description: a href template resource
-    derived_from: tosca.datatypes.Root
     properties:
       href_template:
         type: string
@@ -30,7 +28,6 @@ data_types:
         required: false
   hints:
     description: A resource hint
-    derived_from: tosca.datatypes.Root
     properties:
       allow:
         type: list
@@ -80,15 +77,15 @@ data_types:
       status:
         type: string
         required: false
-        constraints:
-        - valid_values:
-          - deprecated
-          - gone
+        validation:
+          $valid_values:
+          - $value
+          - - deprecated
+            - gone
   mediaTypeArray:
     description: an array of media types
     derived_from: list
   authReq:
-    derived_from: tosca.datatypes.Root
     properties:
       scheme:
         type: string
@@ -100,7 +97,6 @@ data_types:
           type: string
   json_home:
     description: JSON Home
-    derived_from: tosca.datatypes.Root
     properties:
       resource:
         type: map
