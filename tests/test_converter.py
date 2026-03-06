@@ -56,30 +56,40 @@ def test_resolve_ref_external():
     assert c.resolve_ref("http://example.com/other.json", ROOT) == {}
 
 
-# ── build_constraints ─────────────────────────────────────────────────────────
+# ── build_validation ──────────────────────────────────────────────────────────
 
-def test_constraints_numeric():
-    constraints = c.build_constraints({"minimum": 1, "maximum": 100})
-    assert {"greater_or_equal": 1} in constraints
-    assert {"less_or_equal": 100} in constraints
+def test_validation_numeric():
+    v = c.build_validation({"minimum": 1, "maximum": 100})
+    assert v == {"$and": [
+        {"$greater_or_equal": ["$value", 1]},
+        {"$less_or_equal": ["$value", 100]},
+    ]}
 
-def test_constraints_exclusive():
-    constraints = c.build_constraints({"exclusiveMinimum": 0, "exclusiveMaximum": 10})
-    assert {"greater_than": 0} in constraints
-    assert {"less_than": 10} in constraints
+def test_validation_exclusive():
+    v = c.build_validation({"exclusiveMinimum": 0, "exclusiveMaximum": 10})
+    assert v == {"$and": [
+        {"$greater_than": ["$value", 0]},
+        {"$less_than": ["$value", 10]},
+    ]}
 
-def test_constraints_string():
-    constraints = c.build_constraints({"minLength": 2, "maxLength": 50, "pattern": "^[a-z]+$"})
-    assert {"min_length": 2} in constraints
-    assert {"max_length": 50} in constraints
-    assert {"pattern": "^[a-z]+$"} in constraints
+def test_validation_string():
+    v = c.build_validation({"minLength": 2, "maxLength": 50, "pattern": "^[a-z]+$"})
+    assert v == {"$and": [
+        {"$greater_or_equal": [{"$length": ["$value"]}, 2]},
+        {"$less_or_equal": [{"$length": ["$value"]}, 50]},
+        {"$matches": ["$value", "^[a-z]+$"]},
+    ]}
 
-def test_constraints_enum():
-    constraints = c.build_constraints({"enum": ["a", "b", "c"]})
-    assert {"valid_values": ["a", "b", "c"]} in constraints
+def test_validation_enum():
+    v = c.build_validation({"enum": ["a", "b", "c"]})
+    assert v == {"$valid_values": ["$value", ["a", "b", "c"]]}
 
-def test_constraints_empty():
-    assert c.build_constraints({}) == []
+def test_validation_single_clause():
+    v = c.build_validation({"minimum": 0})
+    assert v == {"$greater_or_equal": ["$value", 0]}
+
+def test_validation_empty():
+    assert c.build_validation({}) is None
 
 
 # ── schema_to_property ────────────────────────────────────────────────────────
@@ -199,7 +209,7 @@ def test_convert_schema_scalar_def():
     result = convert_schema(schema, "Unused")
     dt = result["DiskType"]
     assert dt["derived_from"] == "string"
-    assert {"valid_values": ["ssd", "hdd"]} in dt["constraints"]
+    assert dt["validation"] == {"$valid_values": ["$value", ["ssd", "hdd"]]}
 
 
 # ── build_tosca_document ──────────────────────────────────────────────────────

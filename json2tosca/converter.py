@@ -59,24 +59,32 @@ class Converter:
             return "list"
         return self.JSON_SCHEMA_TO_TOSCA_TYPE.get(json_type or "string", "string")
 
-    def build_constraints(self, schema_fragment: dict[str, Any]) -> list[dict[str, Any]]:
-        """Build a TOSCA ``constraints`` list from JSON Schema validation keywords."""
-        constraints: list[dict[str, Any]] = []
-        mapping = [
-            ("minimum",          "greater_or_equal"),
-            ("exclusiveMinimum", "greater_than"),
-            ("maximum",          "less_or_equal"),
-            ("exclusiveMaximum", "less_than"),
-            ("minLength",        "min_length"),
-            ("maxLength",        "max_length"),
-            ("pattern",          "pattern"),
-        ]
-        for js_kw, tosca_kw in mapping:
-            if js_kw in schema_fragment:
-                constraints.append({tosca_kw: schema_fragment[js_kw]})
+    def build_validation(self, schema_fragment: dict[str, Any]) -> dict[str, Any] | None:
+        """Build a TOSCA 2.0 ``validation`` expression from JSON Schema validation keywords."""
+        clauses: list[dict[str, Any]] = []
+
+        if "minimum" in schema_fragment:
+            clauses.append({"$greater_or_equal": ["$value", schema_fragment["minimum"]]})
+        if "exclusiveMinimum" in schema_fragment:
+            clauses.append({"$greater_than": ["$value", schema_fragment["exclusiveMinimum"]]})
+        if "maximum" in schema_fragment:
+            clauses.append({"$less_or_equal": ["$value", schema_fragment["maximum"]]})
+        if "exclusiveMaximum" in schema_fragment:
+            clauses.append({"$less_than": ["$value", schema_fragment["exclusiveMaximum"]]})
+        if "minLength" in schema_fragment:
+            clauses.append({"$greater_or_equal": [{"$length": ["$value"]}, schema_fragment["minLength"]]})
+        if "maxLength" in schema_fragment:
+            clauses.append({"$less_or_equal": [{"$length": ["$value"]}, schema_fragment["maxLength"]]})
+        if "pattern" in schema_fragment:
+            clauses.append({"$matches": ["$value", schema_fragment["pattern"]]})
         if "enum" in schema_fragment:
-            constraints.append({"valid_values": schema_fragment["enum"]})
-        return constraints
+            clauses.append({"$valid_values": ["$value", schema_fragment["enum"]]})
+
+        if not clauses:
+            return None
+        if len(clauses) == 1:
+            return clauses[0]
+        return {"$and": clauses}
 
     def collect_definitions(self, root_schema: dict[str, Any]) -> dict[str, Any]:
         """Collect all named sub-schemas from ``definitions`` and ``$defs``."""
@@ -140,9 +148,9 @@ class Converter:
         if "default" in prop_schema:
             prop_def["default"] = prop_schema["default"]
 
-        constraints = self.build_constraints(prop_schema)
-        if constraints:
-            prop_def["constraints"] = constraints
+        validation = self.build_validation(prop_schema)
+        if validation is not None:
+            prop_def["validation"] = validation
 
         # entry_schema for list types
         if tosca_type == "list":
@@ -194,9 +202,9 @@ class Converter:
         json_type = schema.get("type")
         if json_type and json_type != "object" and not properties_schema:
             tosca_type["derived_from"] = self.get_tosca_type(json_type, schema, root_schema)
-            constraints = self.build_constraints(schema)
-            if constraints:
-                tosca_type["constraints"] = constraints
+            validation = self.build_validation(schema)
+            if validation is not None:
+                tosca_type["validation"] = validation
             tosca_type.pop("properties", None)
 
         return tosca_type
