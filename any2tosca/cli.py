@@ -19,7 +19,7 @@ from .openapi import OpenAPIExtractor
 from .redfish import RedfishNormalizer
 from .yaml_utils import dump_tosca_yaml
 
-__all__ = ["main", "main_redfish", "main_oas"]
+__all__ = ["main_json", "main_redfish", "main_oas"]
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -114,7 +114,7 @@ def _write_output(
 
 # ── any2tosca ────────────────────────────────────────────────────────────────
 
-def main(argv: list[str] | None = None) -> int:
+def main_json(argv: list[str] | None = None) -> int:
     """Convert plain JSON Schema files to TOSCA."""
     parser = _make_parser(
         "any2tosca",
@@ -285,7 +285,7 @@ def main_oas(argv: list[str] | None = None) -> int:
 # ── Entry point wrappers ──────────────────────────────────────────────────────
 
 def cli_entry() -> None:
-    sys.exit(main())
+    sys.exit(main_json())
 
 def redfish_entry() -> None:
     sys.exit(main_redfish())

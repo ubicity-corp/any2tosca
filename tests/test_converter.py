@@ -12,7 +12,7 @@ import pytest
 import yaml
 
 from any2tosca.converter import Converter, ConversionResult, build_tosca_document, convert_schema
-from any2tosca.cli import main
+from any2tosca.cli import main_json
 
 c = Converter()
 
@@ -279,7 +279,7 @@ def tmp_schema(tmp_path: Path) -> Path:
 
 def test_cli_single_file(tmp_schema: Path, tmp_path: Path):
     out = tmp_path / "out.yaml"
-    rc = main([str(tmp_schema), "-o", str(out)])
+    rc = main_json([str(tmp_schema), "-o", str(out)])
     assert rc == 0
     assert out.exists()
     doc = yaml.safe_load(out.read_text())
@@ -295,7 +295,7 @@ def test_cli_directory(tmp_path: Path):
         (schema_dir / f"{name}.json").write_text(json.dumps(s))
 
     out = tmp_path / "combined.yaml"
-    rc = main([str(schema_dir), "-o", str(out)])
+    rc = main_json([str(schema_dir), "-o", str(out)])
     assert rc == 0
     doc = yaml.safe_load(out.read_text())
     assert "Alpha" in doc["data_types"]
@@ -303,7 +303,7 @@ def test_cli_directory(tmp_path: Path):
 
 
 def test_cli_no_files(tmp_path: Path):
-    rc = main([str(tmp_path / "nonexistent.json")])
+    rc = main_json([str(tmp_path / "nonexistent.json")])
     assert rc != 0
 
 
@@ -311,5 +311,5 @@ def test_cli_bad_json(tmp_path: Path):
     bad = tmp_path / "bad.json"
     bad.write_text("{ not valid json }")
     out = tmp_path / "out.yaml"
-    rc = main([str(bad), "-o", str(out)])
+    rc = main_json([str(bad), "-o", str(out)])
     assert rc != 0
