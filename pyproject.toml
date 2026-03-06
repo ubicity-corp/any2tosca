@@ -25,6 +25,7 @@ classifiers = [
 dependencies = [
     "pyyaml>=6.0",
     "referencing>=0.28.0",
+    "pyang>=2.6",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +40,7 @@ dev = [
 any2tosca = "any2tosca.cli:cli_entry"
 redfish2tosca = "any2tosca.cli:redfish_entry"
 oas2tosca = "any2tosca.cli:oas_entry"
+yang2tosca = "any2tosca.cli:yang_entry"
 
 [project.urls]
 Homepage = "https://github.com/your-org/any2tosca"

@@ -17,9 +17,10 @@ import yaml
 from .converter import ConversionResult, Converter, build_tosca_document, convert_schema
 from .openapi import OpenAPIExtractor
 from .redfish import RedfishNormalizer
+from .yang import YANGNormalizer
 from .yaml_utils import dump_tosca_yaml
 
-__all__ = ["main_json", "main_redfish", "main_oas"]
+__all__ = ["main_json", "main_redfish", "main_oas", "main_yang"]
 
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
@@ -262,6 +263,58 @@ def main_oas(argv: list[str] | None = None) -> int:
     return 0
 
 
+# ── yang2tosca ────────────────────────────────────────────────────────────────
+
+def main_yang(argv: list[str] | None = None) -> int:
+    """Convert YANG module files to TOSCA."""
+    parser = _make_parser(
+        "yang2tosca",
+        "Convert YANG module files to TOSCA node and data types (YAML).",
+        "Examples:\n"
+        "  yang2tosca server.yang\n"
+        "  yang2tosca models/ -o tosca/",
+    )
+    args = parser.parse_args(argv)
+    input_files = _collect_input_files(args.inputs, (".yang",))
+
+    if not input_files:
+        print("Error: no YANG files found.", file=sys.stderr)
+        return 1
+
+    out_dir = Path(args.output) if args.output else Path("tosca")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    normalizer = YANGNormalizer()
+    converter = Converter()
+    written = errors = 0
+
+    for yang_path in input_files:
+        try:
+            root_schema, node_type_names = normalizer.normalize(yang_path)
+        except Exception as exc:
+            print(f"  ✗ Parse error in {yang_path.name}: {exc}", file=sys.stderr)
+            errors += 1
+            continue
+
+        top_name = normalizer.module_name or yang_path.stem
+        result = converter.convert_schema(root_schema, top_name, node_type_names,
+                                          base_path=yang_path.parent)
+        _report(result, args.verbose, yang_path)
+        if not result.data_types and not result.node_types:
+            continue
+        out_path = _write_file(result, yang_path, out_dir)
+        print(f"  → {out_path}")
+        written += 1
+
+    if written == 0:
+        print("No TOSCA files were written.", file=sys.stderr)
+        return 1
+    print(f"\n✅  {written} file(s) written to: {out_dir}/")
+    if errors:
+        print(f"⚠   {errors} file(s) had errors and were skipped.", file=sys.stderr)
+        return 2
+    return 0
+
+
 # ── Entry point wrappers ──────────────────────────────────────────────────────
 
 def cli_entry() -> None:
@@ -272,3 +325,6 @@ def redfish_entry() -> None:
 
 def oas_entry() -> None:
     sys.exit(main_oas())
+
+def yang_entry() -> None:
+    sys.exit(main_yang())
