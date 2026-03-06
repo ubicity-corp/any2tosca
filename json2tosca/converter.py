@@ -243,7 +243,7 @@ class Converter:
     def build_tosca_document(self, all_data_types: dict[str, Any]) -> dict[str, Any]:
         """Wrap a ``data_types`` dict in a full TOSCA service-template skeleton."""
         return {
-            "tosca_definitions_version": "tosca_simple_yaml_1_3",
+            "tosca_definitions_version": "tosca_2_0",
             "description": "Data types generated from JSON Schema by json2tosca",
             "data_types": all_data_types,
         }

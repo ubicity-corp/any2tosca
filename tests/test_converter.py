@@ -206,7 +206,7 @@ def test_convert_schema_scalar_def():
 
 def test_build_tosca_document_structure():
     doc = build_tosca_document({"Foo": {"derived_from": "tosca.datatypes.Root"}})
-    assert doc["tosca_definitions_version"] == "tosca_simple_yaml_1_3"
+    assert doc["tosca_definitions_version"] == "tosca_2_0"
     assert "Foo" in doc["data_types"]
 
 
