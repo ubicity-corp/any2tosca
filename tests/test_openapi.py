@@ -167,7 +167,7 @@ def test_end_to_end_3x():
     root, node_type_names = e.extract(OA3_DOC)
     result = Converter().convert_schema(root, "api", node_type_names)
     assert "Server" in result.node_types
-    assert result.node_types["Server"]["derived_from"] == "Root"
+    assert "derived_from" not in result.node_types["Server"]
     assert "Error" in result.data_types
 
 

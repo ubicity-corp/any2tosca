@@ -217,7 +217,7 @@ def test_end_to_end_node_type(yang_file):
     result = Converter().convert_schema(root, n.module_name, node_type_names,
                                         base_path=yang_file.parent)
     assert "Server" in result.node_types
-    assert result.node_types["Server"]["derived_from"] == "Root"
+    assert "derived_from" not in result.node_types["Server"]
 
 
 def test_end_to_end_data_type(yang_file):

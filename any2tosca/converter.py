@@ -436,7 +436,8 @@ class Converter:
         if description:
             node_type["description"] = FoldedStr(description)
 
-        node_type["derived_from"] = derived_from or "Root"
+        if derived_from:
+            node_type["derived_from"] = derived_from
 
         properties_schema = schema.get("properties", {})
         required_list: list[str] = schema.get("required", [])

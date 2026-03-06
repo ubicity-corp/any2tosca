@@ -224,7 +224,7 @@ def test_convert_schema_node_type():
     }
     result = convert_schema(schema, "Unused", node_type_names={"Server"})
     assert "Server" in result.node_types
-    assert result.node_types["Server"]["derived_from"] == "Root"
+    assert "derived_from" not in result.node_types["Server"]
     assert "Server" not in result.data_types
     assert "OsConfig" in result.data_types
 

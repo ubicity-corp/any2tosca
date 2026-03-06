@@ -153,20 +153,21 @@ print(dump_tosca_yaml(build_tosca_document(result.data_types, result.node_types)
 | `allOf` with mixed schemas | merged properties |
 | `definitions` / `$defs` | top-level `data_types` entries |
 
-All `object` types derive from `tosca.datatypes.Root`; scalar/enum definitions
-derive from the corresponding TOSCA primitive type.
+Scalar/enum definitions derive from the corresponding TOSCA primitive type.
+Complex (object) types emit no `derived_from` unless an `allOf` entry
+supplies an explicit parent.
 
 Schemas that represent resources (identified by OpenAPI POST bodies, the
-Redfish top-level `$ref`, or top-level YANG containers) become `node_types`
-with `derived_from: Root`.
+Redfish top-level `$ref`, or top-level YANG containers) become `node_types`.
+`derived_from` is only set when an `allOf` entry references another type.
 
 ### YANG → TOSCA
 
 | YANG | TOSCA |
 |---|---|
 | `typedef` | `data_type` |
-| `container` (top-level) | `node_type` with `derived_from: Root` |
-| `list` (top-level) | `node_type` with `derived_from: Root` |
+| `container` (top-level) | `node_type` |
+| `list` (top-level) | `node_type` |
 | `container` (nested) | inline `data_type` |
 | `list` (nested) | `list` property with `entry_schema` |
 | `leaf` | scalar property |
