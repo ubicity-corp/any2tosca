@@ -47,11 +47,15 @@ yang2tosca server.yang -o tosca/
 
 # Verbose output (lists converted types)
 any2tosca schemas/ -v
+
+# Extra schema search directories (repeatable)
+redfish2tosca schema.json -I /path/to/DMTF/json-schema -o tosca/
 ```
 
-When a schema file references other schemas in the same directory, the
-generated TOSCA file includes an `imports` section with a `namespace` for
-each dependency.
+When a schema file references other schemas, the generated TOSCA file
+includes an `imports` section with a `url` and `namespace` for each
+dependency.  Referenced files are searched in the input file's own
+directory first, then in any `-I` directories.
 
 ## Python API
 
@@ -153,16 +157,17 @@ print(dump_tosca_yaml(build_tosca_document(result.data_types, result.node_types)
 | `allOf` with mixed schemas | merged properties |
 | `anyOf` / `oneOf` with null alternative | flattened to non-null member |
 | `anyOf` / `oneOf` with single `$ref` | `derived_from` |
-| `anyOf` / `oneOf` with multiple members | first `$ref` → `derived_from`, rest merged |
+| `anyOf` / `oneOf` with versioned `$refs` (same base name) | highest version selected |
+| `anyOf` / `oneOf` with multiple `$refs` | first `$ref` → `derived_from`, rest merged |
 | `definitions` / `$defs` | top-level `data_types` entries |
 
 Scalar/enum definitions derive from the corresponding TOSCA primitive type.
-Complex (object) types emit no `derived_from` unless an `allOf` entry
-supplies an explicit parent.
+Complex (object) types emit no `derived_from` unless a combining keyword
+(`allOf`, `anyOf`, `oneOf`) supplies an explicit parent reference.
 
 Schemas that represent resources (identified by OpenAPI POST bodies, the
 Redfish top-level `$ref`, or top-level YANG containers) become `node_types`.
-`derived_from` is only set when an `allOf` entry references another type.
+`derived_from` is only emitted when a combining keyword resolves to a parent type.
 
 ### YANG → TOSCA
 
