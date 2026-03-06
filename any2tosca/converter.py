@@ -520,7 +520,7 @@ class Converter:
             "description": FoldedStr("Types generated from JSON Schema by any2tosca"),
         }
         if imports:
-            doc["imports"] = [{"file": file, "namespace": ns} for ns, file in imports.items()]
+            doc["imports"] = [{"url": file, "namespace": ns} for ns, file in imports.items()]
         if data_types:
             doc["data_types"] = data_types
         if node_types:

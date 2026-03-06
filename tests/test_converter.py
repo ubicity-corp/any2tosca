@@ -401,7 +401,7 @@ def test_build_tosca_document_with_imports():
         {"Foo": {}},
         imports={"bar": "bar.tosca.yaml"},
     )
-    assert doc["imports"] == [{"file": "bar.tosca.yaml", "namespace": "bar"}]
+    assert doc["imports"] == [{"url": "bar.tosca.yaml", "namespace": "bar"}]
 
 
 # ── CLI integration tests ─────────────────────────────────────────────────────
