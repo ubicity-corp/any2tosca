@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -157,7 +158,8 @@ class Converter:
         """
         file_part, type_name = self._parse_ref(ref)
         if not type_name:
-            return "string"  # unresolvable external URI
+            print(f"Warning: cannot resolve $ref '{ref}' — using 'string'", file=sys.stderr)
+            return "string"
         if file_part is None:
             return type_name  # local ref
         namespace = self._namespace_for(file_part)
@@ -193,6 +195,7 @@ class Converter:
             contents = resolver.lookup(ref).contents
             return contents if isinstance(contents, dict) else {}
         except Exception:
+            print(f"Warning: failed to resolve $ref '{ref}' — schema details will be missing", file=sys.stderr)
             return {}
 
     def get_tosca_type(
