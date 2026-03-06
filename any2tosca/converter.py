@@ -42,9 +42,18 @@ class Converter:
 
     def __init__(self) -> None:
         self._base_path: Path | None = None
+        self._search_paths: list[Path] = []     # additional schema search dirs
         self._imports: dict[str, str] = {}      # namespace → tosca_file
         self._registry: Registry | None = None  # referencing Registry
         self._id_to_path: dict[str, Path] = {}  # $id URI → local Path
+
+    def _all_dirs(self) -> list[Path]:
+        """All directories to search for schema files, base path first."""
+        dirs: list[Path] = []
+        if self._base_path is not None:
+            dirs.append(self._base_path)
+        dirs.extend(self._search_paths)
+        return dirs
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -63,8 +72,8 @@ class Converter:
             return self._registry, self._id_to_path
         self._id_to_path = {}
         resources: list[tuple[str, Resource]] = []
-        if self._base_path is not None:
-            for json_file in self._base_path.glob("*.json"):
+        for search_dir in self._all_dirs():
+            for json_file in search_dir.glob("*.json"):
                 try:
                     with open(json_file, encoding="utf-8") as fh:
                         schema = json.load(fh)
@@ -93,11 +102,14 @@ class Converter:
             uri_no_frag, _, fragment = ref.partition("#")
             _, id_to_path = self._get_registry()
             file_path = id_to_path.get(uri_no_frag)
-            if file_path is None and self._base_path is not None:
+            if file_path is None:
                 # Fallback: match by filename when $id doesn't match the URI
-                candidate = self._base_path / Path(uri_no_frag).name
-                if candidate.exists():
-                    file_path = candidate
+                fname = Path(uri_no_frag).name
+                for search_dir in self._all_dirs():
+                    candidate = search_dir / fname
+                    if candidate.exists():
+                        file_path = candidate
+                        break
             if file_path is None:
                 return None, ""
             type_name = self.sanitize_name(fragment.split("/")[-1]) if fragment else self.sanitize_name(file_path.stem)
@@ -205,8 +217,11 @@ class Converter:
         # Registry lookup failed — fall back to loading the file directly by name
         if "://" in ref:
             uri_no_frag, _, fragment = ref.partition("#")
-            candidate = self._base_path / Path(uri_no_frag).name
-            if candidate.exists():
+            fname = Path(uri_no_frag).name
+            candidate = next(
+                (d / fname for d in self._all_dirs() if (d / fname).exists()), None
+            )
+            if candidate is not None and candidate.exists():
                 try:
                     with open(candidate, encoding="utf-8") as fh:
                         doc = json.load(fh)
@@ -486,6 +501,7 @@ class Converter:
         top_level_name: str,
         node_type_names: frozenset[str] | set[str] = frozenset(),
         base_path: Path | None = None,
+        search_paths: list[Path] | None = None,
     ) -> ConversionResult:
         """
         Convert an entire JSON Schema document to TOSCA types.
@@ -501,6 +517,9 @@ class Converter:
             Directory containing the schema file.  When provided, external
             ``$ref`` values are resolved relative to this directory and the
             corresponding TOSCA files are recorded as imports.
+        search_paths:
+            Additional directories to search for referenced schema files,
+            consulted after ``base_path``.
 
         Returns
         -------
@@ -508,7 +527,8 @@ class Converter:
             Named tuple with ``data_types``, ``node_types``, and ``imports`` dicts.
         """
         self._base_path = base_path
-        self._registry = None   # rebuild for new base_path
+        self._search_paths = list(search_paths) if search_paths else []
+        self._registry = None   # rebuild for new base_path / search_paths
         self._id_to_path = {}
         self._imports = {}
         data_types: dict[str, Any] = {}
@@ -563,8 +583,10 @@ def convert_schema(
     top_level_name: str,
     node_type_names: frozenset[str] | set[str] = frozenset(),
     base_path: Path | None = None,
+    search_paths: list[Path] | None = None,
 ) -> ConversionResult:
-    return Converter().convert_schema(root_schema, top_level_name, node_type_names, base_path)
+    return Converter().convert_schema(root_schema, top_level_name, node_type_names,
+                                      base_path, search_paths)
 
 
 def build_tosca_document(

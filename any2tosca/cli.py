@@ -45,6 +45,14 @@ def _make_parser(prog: str, description: str, epilog: str) -> argparse.ArgumentP
         help="Output directory for TOSCA files (default: tosca/).",
     )
     parser.add_argument(
+        "-I", "--include-dir",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Additional directory to search for referenced schema files "
+             "(may be given multiple times).",
+    )
+    parser.add_argument(
         "-v", "--verbose",
         action="store_true",
         help="Print extra detail while processing.",
@@ -117,6 +125,7 @@ def main_json(argv: list[str] | None = None) -> int:
 
     out_dir = Path(args.output) if args.output else Path("tosca")
     out_dir.mkdir(parents=True, exist_ok=True)
+    search_paths = [Path(d) for d in args.include_dir]
     written = errors = 0
 
     for schema_path in input_files:
@@ -132,7 +141,8 @@ def main_json(argv: list[str] | None = None) -> int:
             continue
 
         top_name = root_schema.get("title") or schema_path.stem
-        result = convert_schema(root_schema, top_name, base_path=schema_path.parent)
+        result = convert_schema(root_schema, top_name, base_path=schema_path.parent,
+                                search_paths=search_paths)
         _report(result, args.verbose, schema_path)
         if not result.data_types and not result.node_types:
             continue
@@ -172,6 +182,7 @@ def main_redfish(argv: list[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     normalizer = RedfishNormalizer()
     converter = Converter()
+    search_paths = [Path(d) for d in args.include_dir]
     written = errors = 0
 
     for schema_path in input_files:
@@ -188,7 +199,9 @@ def main_redfish(argv: list[str] | None = None) -> int:
 
         root_schema, node_type_names = normalizer.normalize(redfish_schema)
         top_name = next(iter(node_type_names), None) or schema_path.stem
-        result = converter.convert_schema(root_schema, top_name, node_type_names, base_path=schema_path.parent)
+        result = converter.convert_schema(root_schema, top_name, node_type_names,
+                                          base_path=schema_path.parent,
+                                          search_paths=search_paths)
         _report(result, args.verbose, schema_path)
         if not result.data_types and not result.node_types:
             continue
@@ -229,6 +242,7 @@ def main_oas(argv: list[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     extractor = OpenAPIExtractor()
     converter = Converter()
+    search_paths = [Path(d) for d in args.include_dir]
     written = errors = 0
 
     for api_path in input_files:
@@ -245,7 +259,9 @@ def main_oas(argv: list[str] | None = None) -> int:
 
         root_schema, node_type_names = extractor.extract(openapi_doc)
         top_name = openapi_doc.get("info", {}).get("title") or api_path.stem
-        result = converter.convert_schema(root_schema, top_name, node_type_names, base_path=api_path.parent)
+        result = converter.convert_schema(root_schema, top_name, node_type_names,
+                                          base_path=api_path.parent,
+                                          search_paths=search_paths)
         _report(result, args.verbose, api_path)
         if not result.data_types and not result.node_types:
             continue
@@ -285,6 +301,7 @@ def main_yang(argv: list[str] | None = None) -> int:
     out_dir.mkdir(parents=True, exist_ok=True)
     normalizer = YANGNormalizer()
     converter = Converter()
+    search_paths = [Path(d) for d in args.include_dir]
     written = errors = 0
 
     for yang_path in input_files:
@@ -297,7 +314,8 @@ def main_yang(argv: list[str] | None = None) -> int:
 
         top_name = normalizer.module_name or yang_path.stem
         result = converter.convert_schema(root_schema, top_name, node_type_names,
-                                          base_path=yang_path.parent)
+                                          base_path=yang_path.parent,
+                                          search_paths=search_paths)
         _report(result, args.verbose, yang_path)
         if not result.data_types and not result.node_types:
             continue
