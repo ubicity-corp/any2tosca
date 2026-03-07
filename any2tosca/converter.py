@@ -166,6 +166,43 @@ class Converter:
         """Derive the expected TOSCA output filename for a JSON Schema file."""
         return Path(file_part).stem + ".yaml"
 
+    def _rewrite_local_refs(self, obj: Any, file_part: str) -> Any:
+        """
+        Recursively rewrite ``$ref`` values that start with ``#/`` to be
+        prefixed with *file_part*, turning local refs into external file refs.
+
+        This is applied to properties inlined from external schemas so that
+        references to types defined in that external schema are expressed as
+        ``ExternalFile.json#/definitions/TypeName`` rather than the ambiguous
+        ``#/definitions/TypeName``.
+        """
+        if isinstance(obj, dict):
+            return {
+                k: (f"{file_part}{v}"
+                    if k == "$ref" and isinstance(v, str) and v.startswith("#/")
+                    else self._rewrite_local_refs(v, file_part))
+                for k, v in obj.items()
+            }
+        if isinstance(obj, list):
+            return [self._rewrite_local_refs(item, file_part) for item in obj]
+        return obj
+
+    def _resolve_for_merge(self, ref: str, root_schema: dict[str, Any]) -> dict[str, Any]:
+        """
+        Resolve *ref* for the purpose of inlining its properties.
+
+        For external refs, local ``#/…`` sub-refs inside the resolved schema
+        are rewritten to ``filename#/…`` so that the converter later generates
+        correctly namespaced TOSCA type references (and records the import).
+        """
+        resolved = self.resolve_ref(ref, root_schema)
+        if ref.startswith("#"):
+            return resolved
+        file_part, _ = self._parse_ref(ref)
+        if file_part:
+            resolved = self._rewrite_local_refs(resolved, file_part)
+        return resolved
+
     def _ref_to_tosca_type(self, ref: str) -> str:
         """
         Convert a ``$ref`` to a TOSCA type name.
@@ -215,13 +252,13 @@ class Converter:
             pass
 
         # Registry lookup failed — fall back to loading the file directly by name
-        if "://" in ref:
-            uri_no_frag, _, fragment = ref.partition("#")
-            fname = Path(uri_no_frag).name
+        file_no_frag, _, fragment = ref.partition("#")
+        if file_no_frag:
+            fname = Path(file_no_frag).name
             candidate = next(
                 (d / fname for d in self._all_dirs() if (d / fname).exists()), None
             )
-            if candidate is not None and candidate.exists():
+            if candidate is not None:
                 try:
                     with open(candidate, encoding="utf-8") as fh:
                         doc = json.load(fh)
@@ -371,11 +408,11 @@ class Converter:
                             f"merging '{sub['$ref']}' properties; semantic union is lost",
                             file=sys.stderr,
                         )
-                    resolved = self.resolve_ref(sub["$ref"], root_schema)
+                    resolved = self._resolve_for_merge(sub["$ref"], root_schema)
                     merged_props.update(resolved.get("properties", {}))
                     merged_required.extend(resolved.get("required", []))
             else:
-                resolved = self.resolve_ref(sub["$ref"], root_schema) if "$ref" in sub else sub
+                resolved = self._resolve_for_merge(sub["$ref"], root_schema) if "$ref" in sub else sub
                 merged_props.update(resolved.get("properties", {}))
                 merged_required.extend(resolved.get("required", []))
                 for key in ("description", "title", "type"):

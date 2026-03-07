@@ -550,6 +550,50 @@ def test_build_tosca_document_with_imports():
     assert doc["imports"] == [{"url": "bar.yaml", "namespace": "bar"}]
 
 
+def test_merge_sources_local_refs_rewritten(tmp_path: Path):
+    """Local #/... refs in properties merged from an external file are rewritten.
+
+    Mimics the Redfish anyOf pattern: first ref → derived_from, second ref's
+    properties are inlined.  Those properties may reference ``#/definitions/``
+    types that live in the *external* file; they must be rewritten to
+    ``ExternalFile.json#/definitions/TypeName`` so the TOSCA output uses a
+    namespaced type rather than an unresolvable local name.
+    """
+    # idRef.json — becomes derived_from
+    id_ref = tmp_path / "idRef.json"
+    id_ref.write_text(json.dumps({"$id": "idRef.json", "type": "object"}))
+
+    # Versioned.v1_0_0.json — its properties get merged in; they contain a
+    # local $ref that must be rewritten
+    ext = tmp_path / "Versioned.v1_0_0.json"
+    ext.write_text(json.dumps({
+        "$id": "Versioned.v1_0_0.json",
+        "type": "object",
+        "properties": {
+            "net": {"$ref": "#/definitions/Network"},
+        },
+        "definitions": {
+            "Network": {"type": "object", "properties": {"cidr": {"type": "string"}}},
+        },
+    }))
+    schema = {
+        "title": "Container",
+        "type": "object",
+        "anyOf": [
+            {"$ref": "idRef.json"},
+            {"$ref": "Versioned.v1_0_0.json"},
+        ],
+    }
+    result = convert_schema(schema, "Container", node_type_names={"Container"},
+                            base_path=tmp_path)
+    props = result.node_types.get("Container") or result.data_types.get("Container", {})
+    net_type = props.get("properties", {}).get("net", {}).get("type", "")
+    assert ":" in net_type, f"Expected namespaced type for 'net', got: {net_type!r}"
+    assert "versioned" in net_type.lower() or "Network" in net_type
+    # The import for the external file must be recorded
+    assert any("Versioned" in v for v in result.imports.values())
+
+
 # ── CLI integration tests ─────────────────────────────────────────────────────
 
 @pytest.fixture()
