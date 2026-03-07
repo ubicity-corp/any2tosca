@@ -357,8 +357,11 @@ class Converter:
 
         - Null-only members are stripped first.
         - If a single non-null member remains it is flattened (nullable pattern).
-        - Multiple pure ``$ref`` members: first becomes ``derived_from``; the
-          rest have their properties merged in and a warning is emitted.
+        - Versioned ``$refs`` (``BaseName.vX_Y_Z``) identify the actual resource
+          type; the latest version becomes ``derived_from`` and properties from
+          any remaining (unversioned) ``$refs`` are merged in.
+        - Multiple pure ``$ref`` members with no versioned group: first becomes
+          ``derived_from``; the rest have their properties merged in.
         - Mixed members (refs + inline schemas): same merge as ``allOf``.
         """
         keyword = next((k for k in ("allOf", "anyOf", "oneOf") if k in schema), None)
@@ -381,14 +384,44 @@ class Converter:
                     return outer, self._ref_to_tosca_type(single["$ref"])
                 return self._merge_allof({**single, **outer}, root_schema)
 
-            # Multiple pure $refs that are versioned variants of the same resource
-            # → pick the most recent version silently
+            # Multiple pure $refs: separate versioned (BaseName.vX_Y_Z) from others.
+            # If exactly one versioned-base group exists, pick its latest version as
+            # derived_from and merge properties from unversioned alternatives.
             pure_refs = [m["$ref"] for m in members if "$ref" in m and len(m) == 1]
             if len(pure_refs) == len(members):
-                best = self._pick_latest_versioned_ref(pure_refs)
-                if best is not None:
-                    outer = {k: v for k, v in schema.items() if k != keyword}
-                    return outer, self._ref_to_tosca_type(best)
+                _VER = re.compile(r"^(.+)\.v(\d+)[._](\d+)[._](\d+)")
+                versioned: dict[str, list[str]] = {}
+                unversioned: list[str] = []
+                for ref in pure_refs:
+                    uri = ref.partition("#")[0]
+                    stem = Path(uri.split("/")[-1]).stem
+                    m = _VER.match(stem)
+                    if m:
+                        versioned.setdefault(m.group(1), []).append(ref)
+                    else:
+                        unversioned.append(ref)
+
+                if len(versioned) == 1:
+                    best = self._pick_latest_versioned_ref(
+                        next(iter(versioned.values()))
+                    )
+                    if best is not None:
+                        outer = {k: v for k, v in schema.items() if k != keyword}
+                        derived_from = self._ref_to_tosca_type(best)
+                        if not unversioned:
+                            return outer, derived_from
+                        # Merge properties from unversioned alternatives
+                        merged_props: dict[str, Any] = {}
+                        merged_required: list[str] = []
+                        for ref in unversioned:
+                            resolved = self._resolve_for_merge(ref, root_schema)
+                            merged_props.update(resolved.get("properties", {}))
+                            merged_required.extend(resolved.get("required", []))
+                        if merged_props:
+                            outer["properties"] = merged_props
+                        if merged_required:
+                            outer["required"] = list(dict.fromkeys(merged_required))
+                        return outer, derived_from
 
         merged: dict[str, Any] = {k: v for k, v in schema.items() if k != keyword}
         merged_props: dict[str, Any] = dict(merged.pop("properties", {}))

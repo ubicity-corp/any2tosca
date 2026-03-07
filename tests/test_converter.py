@@ -550,48 +550,84 @@ def test_build_tosca_document_with_imports():
     assert doc["imports"] == [{"url": "bar.yaml", "namespace": "bar"}]
 
 
-def test_merge_sources_local_refs_rewritten(tmp_path: Path):
-    """Local #/... refs in properties merged from an external file are rewritten.
+def test_anyof_versioned_plus_unversioned(tmp_path: Path):
+    """anyOf with versioned + unversioned refs: versioned becomes derived_from.
 
-    Mimics the Redfish anyOf pattern: first ref → derived_from, second ref's
-    properties are inlined.  Those properties may reference ``#/definitions/``
-    types that live in the *external* file; they must be rewritten to
-    ``ExternalFile.json#/definitions/TypeName`` so the TOSCA output uses a
-    namespaced type rather than an unresolvable local name.
+    Mimics the Redfish anyOf pattern where idRef is the unversioned fallback
+    and Container.v1_0_0.json is the actual resource type.  The versioned ref
+    should become derived_from; the unversioned one is merged (typically has
+    no extra properties, but its import is still recorded).
     """
-    # idRef.json — becomes derived_from
     id_ref = tmp_path / "idRef.json"
-    id_ref.write_text(json.dumps({"$id": "idRef.json", "type": "object"}))
+    id_ref.write_text(json.dumps({"$id": "idRef.json", "type": "object",
+                                   "properties": {"@odata.id": {"type": "string"}}}))
 
-    # Versioned.v1_0_0.json — its properties get merged in; they contain a
-    # local $ref that must be rewritten
-    ext = tmp_path / "Versioned.v1_0_0.json"
+    ext = tmp_path / "Container.v1_0_0.json"
     ext.write_text(json.dumps({
-        "$id": "Versioned.v1_0_0.json",
+        "$id": "Container.v1_0_0.json",
         "type": "object",
-        "properties": {
-            "net": {"$ref": "#/definitions/Network"},
-        },
-        "definitions": {
-            "Network": {"type": "object", "properties": {"cidr": {"type": "string"}}},
-        },
+        "properties": {"Name": {"type": "string"}},
     }))
     schema = {
         "title": "Container",
         "type": "object",
         "anyOf": [
             {"$ref": "idRef.json"},
-            {"$ref": "Versioned.v1_0_0.json"},
+            {"$ref": "Container.v1_0_0.json"},
         ],
     }
     result = convert_schema(schema, "Container", node_type_names={"Container"},
                             base_path=tmp_path)
-    props = result.node_types.get("Container") or result.data_types.get("Container", {})
-    net_type = props.get("properties", {}).get("net", {}).get("type", "")
-    assert ":" in net_type, f"Expected namespaced type for 'net', got: {net_type!r}"
-    assert "versioned" in net_type.lower() or "Network" in net_type
-    # The import for the external file must be recorded
-    assert any("Versioned" in v for v in result.imports.values())
+    node = result.node_types.get("Container", {})
+    # Versioned ref → derived_from
+    assert "containerv100" in node.get("derived_from", "").lower() or \
+           "Container" in node.get("derived_from", "")
+    # Unversioned ref properties (odata.id) are merged in
+    assert any("odata" in k.lower() or "id" in k.lower()
+               for k in node.get("properties", {}))
+    # Versioned file is recorded as an import (derived_from references it)
+    assert any("Container.v1_0_0" in v or "containerv100" in v.lower()
+               for v in result.imports.values())
+
+
+def test_anyof_versioned_ref_local_refs_rewritten(tmp_path: Path):
+    """Local #/... refs in unversioned-ref properties are rewritten.
+
+    When the unversioned ref's properties contain #/definitions/... sub-refs,
+    they must be rewritten to ExternalFile.json#/definitions/... so the TOSCA
+    output uses namespaced types rather than unresolvable local names.
+    """
+    id_ref = tmp_path / "idRef.json"
+    id_ref.write_text(json.dumps({
+        "$id": "idRef.json",
+        "type": "object",
+        "properties": {
+            "context": {"$ref": "#/definitions/Context"},
+        },
+        "definitions": {
+            "Context": {"type": "object", "properties": {"uri": {"type": "string"}}},
+        },
+    }))
+    ext = tmp_path / "Resource.v1_0_0.json"
+    ext.write_text(json.dumps({
+        "$id": "Resource.v1_0_0.json",
+        "type": "object",
+        "properties": {"Name": {"type": "string"}},
+    }))
+    schema = {
+        "title": "Resource",
+        "type": "object",
+        "anyOf": [
+            {"$ref": "idRef.json"},
+            {"$ref": "Resource.v1_0_0.json"},
+        ],
+    }
+    result = convert_schema(schema, "Resource", node_type_names={"Resource"},
+                            base_path=tmp_path)
+    node = result.node_types.get("Resource", {})
+    context_type = node.get("properties", {}).get("context", {}).get("type", "")
+    assert ":" in context_type, \
+        f"Expected namespaced type for 'context', got: {context_type!r}"
 
 
 # ── CLI integration tests ─────────────────────────────────────────────────────
