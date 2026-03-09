@@ -688,6 +688,46 @@ class Converter:
 
     # ── Core conversion ───────────────────────────────────────────────────────
 
+    def _build_simple_prop_def(
+        self,
+        tosca_type: str,
+        schema: dict[str, Any],
+        prop_name: str,
+        required_props: list[str],
+    ) -> dict[str, Any]:
+        """Build a basic TOSCA property dict with type, description, required, and default."""
+        prop_def: dict[str, Any] = {"type": tosca_type}
+        description = schema.get("description") or schema.get("title")
+        if description:
+            prop_def["description"] = FoldedStr(description)
+        prop_def["required"] = prop_name in required_props
+        if "default" in schema:
+            prop_def["default"] = schema["default"]
+        return prop_def
+
+    def _resolve_entry_type(
+        self,
+        item_schema: dict[str, Any],
+        prop_name: str,
+        root_schema: dict[str, Any],
+        data_types: dict[str, Any],
+    ) -> str:
+        """
+        Resolve the TOSCA type for a list ``items`` or map ``additionalProperties`` schema.
+
+        Handles circular-import files by inlining the referenced schema as a
+        local data type rather than generating an external import.
+        """
+        if "$ref" in item_schema:
+            ref = item_schema["$ref"]
+            fp, type_name = self._parse_ref(ref)
+            if fp is not None and Path(fp).name in self._no_import_files:
+                resolved = self._resolve_for_merge(ref, root_schema)
+                resolved = {**resolved, **{k: v for k, v in item_schema.items() if k != "$ref"}}
+                return self._inline_type_or_primitive(type_name, resolved, root_schema, data_types)
+            return self._ref_to_tosca_type(ref)
+        return self.get_tosca_type(item_schema.get("type"), item_schema, root_schema)
+
     def _inline_type_or_primitive(
         self,
         type_name: str,
@@ -708,7 +748,7 @@ class Converter:
             schema, _ = self._merge_allof(schema, root_schema)
 
         json_type = schema.get("type")
-        if schema.get("properties") or json_type in ("object", None) and schema.get("properties"):
+        if schema.get("properties"):
             safe_name = self.sanitize_name(type_name)
             if safe_name not in data_types:
                 data_types[safe_name] = self.schema_to_tosca_data_type(
@@ -730,14 +770,7 @@ class Converter:
         if any(k in prop_schema for k in ("allOf", "anyOf", "oneOf")):
             prop_schema, allof_type = self._merge_allof(prop_schema, root_schema)
             if allof_type and not prop_schema.get("properties"):
-                prop_def: dict[str, Any] = {"type": allof_type}
-                description = prop_schema.get("description") or prop_schema.get("title")
-                if description:
-                    prop_def["description"] = FoldedStr(description)
-                prop_def["required"] = prop_name in required_props
-                if "default" in prop_schema:
-                    prop_def["default"] = prop_schema["default"]
-                return prop_def
+                return self._build_simple_prop_def(allof_type, prop_schema, prop_name, required_props)
             # otherwise fall through with the merged schema
 
         # $ref → use the referenced TOSCA data type name directly
@@ -758,14 +791,7 @@ class Converter:
                 ref_type_name = self._ref_to_tosca_type(ref)
                 ref_schema = self.resolve_ref(ref, root_schema)
                 merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
-                prop_def: dict[str, Any] = {"type": ref_type_name}
-                description = merged.get("description") or merged.get("title")
-                if description:
-                    prop_def["description"] = FoldedStr(description)
-                prop_def["required"] = prop_name in required_props
-                if "default" in merged:
-                    prop_def["default"] = merged["default"]
-                return prop_def
+                return self._build_simple_prop_def(ref_type_name, merged, prop_name, required_props)
 
         json_type = prop_schema.get("type")
 
@@ -775,80 +801,39 @@ class Converter:
             data_types[nested_type_name] = self.schema_to_tosca_data_type(
                 nested_type_name, prop_schema, root_schema, data_types
             )
-            prop_def = {"type": nested_type_name}
-            description = prop_schema.get("description") or prop_schema.get("title")
-            if description:
-                prop_def["description"] = FoldedStr(description)
-            prop_def["required"] = prop_name in required_props
-            if "default" in prop_schema:
-                prop_def["default"] = prop_schema["default"]
-            return prop_def
+            return self._build_simple_prop_def(nested_type_name, prop_schema, prop_name, required_props)
 
+        # Primitive type — also carries validation and entry_schema
         tosca_type = self.get_tosca_type(json_type, prop_schema, root_schema)
-        prop_def = {"type": tosca_type}
-
-        # Description (prefer 'description' over 'title')
-        description = prop_schema.get("description") or prop_schema.get("title")
-        if description:
-            prop_def["description"] = FoldedStr(description)
-
-        prop_def["required"] = prop_name in required_props
-
-        if "default" in prop_schema:
-            prop_def["default"] = prop_schema["default"]
+        prop_def = self._build_simple_prop_def(tosca_type, prop_schema, prop_name, required_props)
 
         validation = self.build_validation(prop_schema)
         if validation is not None:
             prop_def["validation"] = validation
 
-        # entry_schema for list types
         if tosca_type == "list":
-            items = prop_schema.get("items", {})
-            if "$ref" in items:
-                item_ref = items["$ref"]
-                fp, item_type_name = self._parse_ref(item_ref)
-                if fp is not None and Path(fp).name in self._no_import_files:
-                    # Circular file — resolve inline
-                    item_schema = self._resolve_for_merge(item_ref, root_schema)
-                    item_schema = {**item_schema, **{k: v for k, v in items.items() if k != "$ref"}}
-                    item_tosca_type = self._inline_type_or_primitive(
-                        item_type_name, item_schema, root_schema, data_types
-                    )
-                else:
-                    item_tosca_type = self._ref_to_tosca_type(item_ref)
-            else:
-                item_tosca_type = self.get_tosca_type(items.get("type"), items, root_schema)
-            prop_def["entry_schema"] = {"type": item_tosca_type}
+            prop_def["entry_schema"] = {"type": self._resolve_entry_type(
+                prop_schema.get("items", {}), prop_name, root_schema, data_types,
+            )}
 
-        # entry_schema for map types with additionalProperties (no named properties)
         if tosca_type == "map":
             add_props = prop_schema.get("additionalProperties", {})
             if isinstance(add_props, dict):
-                if "$ref" in add_props:
-                    ap_ref = add_props["$ref"]
-                    fp, ap_type_name = self._parse_ref(ap_ref)
-                    if fp is not None and Path(fp).name in self._no_import_files:
-                        ap_schema = self._resolve_for_merge(ap_ref, root_schema)
-                        ap_schema = {**ap_schema, **{k: v for k, v in add_props.items() if k != "$ref"}}
-                        val_type = self._inline_type_or_primitive(
-                            ap_type_name, ap_schema, root_schema, data_types
-                        )
-                    else:
-                        val_type = self._ref_to_tosca_type(ap_ref)
-                else:
-                    val_type = self.get_tosca_type(add_props.get("type"), add_props, root_schema)
-                prop_def["entry_schema"] = {"type": val_type}
+                prop_def["entry_schema"] = {"type": self._resolve_entry_type(
+                    add_props, prop_name, root_schema, data_types,
+                )}
 
         return prop_def
 
-    def schema_to_tosca_data_type(
+    def _schema_to_tosca_type(
         self,
         type_name: str,
         schema: dict[str, Any],
         root_schema: dict[str, Any],
         data_types: dict[str, Any],
+        is_node_type: bool = False,
     ) -> dict[str, Any]:
-        """Convert a JSON Schema object definition to a TOSCA ``data_types`` entry."""
+        """Shared implementation for data-type and node-type conversion."""
         schema, derived_from = self._merge_allof(schema, root_schema)
 
         tosca_type: dict[str, Any] = {}
@@ -871,16 +856,27 @@ class Converter:
                 for pname, pschema in properties_schema.items()
             }
 
-        # Non-object named types (e.g. a string with enum constraints)
-        json_type = schema.get("type")
-        if json_type and json_type != "object" and not properties_schema:
-            tosca_type["derived_from"] = self.get_tosca_type(json_type, schema, root_schema)
-            validation = self.build_validation(schema)
-            if validation is not None:
-                tosca_type["validation"] = validation
-            tosca_type.pop("properties", None)
+        # Non-object named types (e.g. a string with enum constraints) — data types only
+        if not is_node_type:
+            json_type = schema.get("type")
+            if json_type and json_type != "object" and not properties_schema:
+                tosca_type["derived_from"] = self.get_tosca_type(json_type, schema, root_schema)
+                validation = self.build_validation(schema)
+                if validation is not None:
+                    tosca_type["validation"] = validation
+                tosca_type.pop("properties", None)
 
         return tosca_type
+
+    def schema_to_tosca_data_type(
+        self,
+        type_name: str,
+        schema: dict[str, Any],
+        root_schema: dict[str, Any],
+        data_types: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Convert a JSON Schema object definition to a TOSCA ``data_types`` entry."""
+        return self._schema_to_tosca_type(type_name, schema, root_schema, data_types, is_node_type=False)
 
     def schema_to_tosca_node_type(
         self,
@@ -890,29 +886,7 @@ class Converter:
         data_types: dict[str, Any],
     ) -> dict[str, Any]:
         """Convert a JSON Schema object definition to a TOSCA ``node_types`` entry."""
-        schema, derived_from = self._merge_allof(schema, root_schema)
-
-        node_type: dict[str, Any] = {}
-
-        description = schema.get("description") or schema.get("title")
-        if description:
-            node_type["description"] = FoldedStr(description)
-
-        if derived_from:
-            node_type["derived_from"] = derived_from
-
-        properties_schema = schema.get("properties", {})
-        required_list: list[str] = schema.get("required", [])
-
-        if properties_schema:
-            node_type["properties"] = {
-                self.sanitize_name(pname): self.schema_to_property(
-                    pname, pschema, required_list, root_schema, data_types
-                )
-                for pname, pschema in properties_schema.items()
-            }
-
-        return node_type
+        return self._schema_to_tosca_type(type_name, schema, root_schema, data_types, is_node_type=True)
 
     def convert_schema(
         self,
