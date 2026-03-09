@@ -30,6 +30,9 @@ class ConversionResult(NamedTuple):
 class Converter:
     """Converts JSON Schema documents to TOSCA data_types."""
 
+    #: Matches versioned JSON Schema filenames: ``BaseName.vX_Y_Z`` or ``BaseName.vX.Y.Z``.
+    _VER_RE = re.compile(r"^(.+)\.v(\d+)[._](\d+)[._](\d+)")
+
     JSON_SCHEMA_TO_TOSCA_TYPE: dict[str, str] = {
         "string":  "string",
         "integer": "integer",
@@ -184,7 +187,7 @@ class Converter:
         """
         if not self._current_filename:
             return
-        _VER = re.compile(r"^(.+)\.v(\d+)[._](\d+)[._](\d+)")
+        _VER = self._VER_RE
         seen: set[str] = set()
 
         def _collect(obj: Any) -> None:
@@ -274,7 +277,7 @@ class Converter:
         except (OSError, json.JSONDecodeError):
             return False
 
-        _VER = re.compile(r"^(.+)\.v(\d+)[._](\d+)[._](\d+)")
+        _VER = self._VER_RE
         nested_refs: set[str] = set()
 
         def _collect(obj: Any) -> None:
@@ -459,6 +462,84 @@ class Converter:
             return clauses[0]
         return {"$and": clauses}
 
+    def _classify_member(self, member: dict[str, Any]) -> str:
+        """
+        Classify an ``anyOf``/``oneOf``/``allOf`` member.
+
+        Returns one of:
+
+        - ``"local"``       — pure ``$ref`` to a local ``#/...`` target.
+        - ``"versioned"``   — pure ``$ref`` to a versioned external file
+          (``BaseName.vX_Y_Z``), not circular.
+        - ``"circular"``    — pure ``$ref`` to an external file that is in
+          ``_no_import_files`` or references the current file back.
+        - ``"unversioned"`` — pure ``$ref`` to any other external file.
+        - ``"inline"``      — member has no ``$ref``, or has ``$ref`` plus
+          additional keys (mixed schema).
+        """
+        if "$ref" not in member or len(member) != 1:
+            return "inline"
+        ref = member["$ref"]
+        if ref.startswith("#"):
+            return "local"
+        uri = ref.partition("#")[0]
+        fname = Path(uri).name
+        if fname in self._no_import_files or self._refs_back_to_current(ref):
+            if fname:
+                self._no_import_files.add(fname)
+            return "circular"
+        stem = Path(uri.split("/")[-1]).stem
+        return "versioned" if self._VER_RE.match(stem) else "unversioned"
+
+    def _merge_props_from(
+        self,
+        refs: list[str],
+        schemas: list[dict[str, Any]],
+        root_schema: dict[str, Any],
+        outer: dict[str, Any],
+        outer_wins: bool = False,
+    ) -> dict[str, Any]:
+        """
+        Resolve *refs* and merge *schemas* inline into *outer*.
+
+        Properties and ``required`` lists are accumulated; scalar metadata
+        (``description``, ``title``, ``type``) is lifted into *outer* only
+        when not already present.
+
+        When *outer_wins* is ``True`` the outer schema's existing properties
+        take precedence over those resolved from refs/schemas (used when
+        merging a single unversioned or circular ref whose properties are
+        treated as defaults).  When ``False`` (the default), later-resolved
+        properties overwrite earlier ones.
+        """
+        result = dict(outer)
+        merged_props: dict[str, Any] = dict(result.pop("properties", {}))
+        merged_required: list[str] = list(result.pop("required", []))
+
+        for ref in refs:
+            resolved = self._resolve_for_merge(ref, root_schema)
+            if outer_wins:
+                merged_props = {**resolved.get("properties", {}), **merged_props}
+            else:
+                merged_props.update(resolved.get("properties", {}))
+            merged_required.extend(resolved.get("required", []))
+
+        for sub in schemas:
+            resolved = self._resolve_for_merge(sub["$ref"], root_schema) if "$ref" in sub else sub
+            merged_props.update(resolved.get("properties", {}))
+            merged_required.extend(resolved.get("required", []))
+            # Lift scalar metadata
+            for sub_src in (sub, resolved):
+                for key in ("description", "title", "type"):
+                    if key in sub_src and key not in result:
+                        result[key] = sub_src[key]
+
+        if merged_props:
+            result["properties"] = merged_props
+        if merged_required:
+            result["required"] = list(dict.fromkeys(merged_required))
+        return result
+
     def _pick_latest_versioned_ref(self, refs: list[str]) -> str | None:
         """
         If every ref in *refs* points to a versioned variant of the same base
@@ -466,12 +547,11 @@ class Converter:
         the highest version tuple.  Returns ``None`` if the pattern doesn't
         match or the refs have different base names.
         """
-        _VER = re.compile(r"^(.+)\.v(\d+)[._](\d+)[._](\d+)")
         entries: list[tuple[str, tuple[int, int, int], str]] = []
         for ref in refs:
             uri = ref.partition("#")[0]
             stem = Path(uri.split("/")[-1]).stem   # last path component, no ext
-            m = _VER.match(stem)
+            m = self._VER_RE.match(stem)
             if not m:
                 return None
             base = m.group(1)
@@ -491,178 +571,113 @@ class Converter:
         Flatten ``allOf``, ``anyOf``, or ``oneOf`` into a single merged schema.
 
         Returns ``(merged_schema, derived_from)`` where ``derived_from`` is the
-        TOSCA type name of the first pure ``$ref`` sub-schema (inheritance), or
-        ``None``.
+        TOSCA type name chosen for inheritance, or ``None``.
 
-        ``anyOf`` / ``oneOf`` handling:
+        Member classification (via :meth:`_classify_member`):
+
+        - ``"local"`` / ``"versioned"`` refs → candidate for ``derived_from``.
+        - ``"unversioned"`` / ``"circular"`` refs → properties merged inline.
+        - ``"inline"`` (no ``$ref`` or mixed) → properties + metadata merged inline.
+
+        ``anyOf`` / ``oneOf`` extra rules:
 
         - Null-only members are stripped first.
-        - If a single non-null member remains: versioned external refs and local
-          refs become ``derived_from``; unversioned external refs (e.g. ``idRef``)
-          represent link patterns, not inheritance — their properties are merged
-          inline and ``derived_from`` is left unset.
-        - Versioned ``$refs`` (``BaseName.vX_Y_Z``) identify the actual resource
-          type; the latest version becomes ``derived_from`` and properties from
-          any remaining (unversioned) ``$refs`` are merged in.
-        - Multiple pure ``$ref`` members with no versioned group: first becomes
-          ``derived_from``; the rest have their properties merged in.
-        - Mixed members (refs + inline schemas): same merge as ``allOf``.
+        - Among versioned refs, the latest version of the sole versioned-base
+          group wins as ``derived_from``; all unversioned / circular refs are
+          merged inline instead.
+        - If no versioned group exists, the first local ref becomes
+          ``derived_from``; remaining refs and inline schemas are merged.
         """
         keyword = next((k for k in ("allOf", "anyOf", "oneOf") if k in schema), None)
         if keyword is None:
             return schema, None
 
         members: list[dict[str, Any]] = list(schema[keyword])
+        outer = {k: v for k, v in schema.items() if k != keyword}
 
-        # anyOf / oneOf: strip null-only members; flatten if one remains
+        # Strip null-only members for anyOf/oneOf
         if keyword in ("anyOf", "oneOf"):
             non_null = [m for m in members
                         if not (isinstance(m, dict) and m.get("type") == "null")]
             if non_null:
                 members = non_null
-            if len(members) == 1:
-                outer = {k: v for k, v in schema.items() if k != keyword}
-                single = members[0]
-                if "$ref" in single and len(single) == 1:
-                    ref = single["$ref"]
-                    if not ref.startswith("#"):
-                        # External ref: only use as derived_from if it is a
-                        # versioned resource ref (BaseName.vX_Y_Z).  Unversioned
-                        # external refs (e.g. idRef) represent a link/reference
-                        # pattern, not true type inheritance — merging their
-                        # properties inline avoids mixing data-type and node-type
-                        # hierarchies in TOSCA.
-                        _VER = re.compile(r"^(.+)\.v(\d+)[._](\d+)[._](\d+)")
-                        uri = ref.partition("#")[0]
-                        stem = Path(uri.split("/")[-1]).stem
-                        if not _VER.match(stem):
-                            # Unversioned external ref → merge inline, no derived_from
-                            resolved = self._resolve_for_merge(ref, root_schema)
-                            if resolved.get("properties"):
-                                outer["properties"] = {
-                                    **resolved.get("properties", {}),
-                                    **outer.get("properties", {}),
-                                }
-                            if resolved.get("required"):
-                                outer["required"] = list(dict.fromkeys(
-                                    resolved["required"] + outer.get("required", [])
-                                ))
-                            return outer, None
-                    # Versioned external ref that references the current file
-                    # back would create a circular import — merge inline instead.
-                    if self._refs_back_to_current(ref):
-                        fname = Path(ref.partition("#")[0]).name
-                        if fname:
-                            self._no_import_files.add(fname)
-                        resolved = self._resolve_for_merge(ref, root_schema)
-                        if resolved.get("properties"):
-                            outer["properties"] = {
-                                **resolved.get("properties", {}),
-                                **outer.get("properties", {}),
-                            }
-                        if resolved.get("required"):
-                            outer["required"] = list(dict.fromkeys(
-                                resolved["required"] + outer.get("required", [])
-                            ))
-                        return outer, None
-                    # Local ref or versioned external ref → derived_from
-                    return outer, self._ref_to_tosca_type(ref)
-                return self._merge_allof({**single, **outer}, root_schema)
 
-            # Multiple pure $refs: separate versioned (BaseName.vX_Y_Z) from others.
-            # If exactly one versioned-base group exists, pick its latest version as
-            # derived_from and merge properties from unversioned alternatives.
-            pure_refs = [m["$ref"] for m in members if "$ref" in m and len(m) == 1]
-            if len(pure_refs) == len(members):
-                _VER = re.compile(r"^(.+)\.v(\d+)[._](\d+)[._](\d+)")
-                versioned: dict[str, list[str]] = {}
-                unversioned: list[str] = []
-                for ref in pure_refs:
-                    uri = ref.partition("#")[0]
-                    stem = Path(uri.split("/")[-1]).stem
-                    m = _VER.match(stem)
-                    if m:
-                        versioned.setdefault(m.group(1), []).append(ref)
-                    else:
-                        unversioned.append(ref)
+        # ── Classify all members ──────────────────────────────────────────────
 
-                if len(versioned) == 1:
-                    best = self._pick_latest_versioned_ref(
-                        next(iter(versioned.values()))
-                    )
-                    if best is not None:
-                        outer = {k: v for k, v in schema.items() if k != keyword}
-                        # If the versioned file references the current file back,
-                        # using it as derived_from would create a circular import.
-                        # Merge all refs inline instead.
-                        if self._refs_back_to_current(best):
-                            for ref in pure_refs:
-                                fname = Path(ref.partition("#")[0]).name
-                                if fname:
-                                    self._no_import_files.add(fname)
-                            merged_props_ci: dict[str, Any] = {}
-                            merged_required_ci: list[str] = []
-                            for ref in pure_refs:
-                                resolved = self._resolve_for_merge(ref, root_schema)
-                                merged_props_ci.update(resolved.get("properties", {}))
-                                merged_required_ci.extend(resolved.get("required", []))
-                            if merged_props_ci:
-                                outer["properties"] = merged_props_ci
-                            if merged_required_ci:
-                                outer["required"] = list(dict.fromkeys(merged_required_ci))
-                            return outer, None
-                        derived_from = self._ref_to_tosca_type(best)
-                        if not unversioned:
-                            return outer, derived_from
-                        # Merge properties from unversioned alternatives
-                        merged_props: dict[str, Any] = {}
-                        merged_required: list[str] = []
-                        for ref in unversioned:
-                            resolved = self._resolve_for_merge(ref, root_schema)
-                            merged_props.update(resolved.get("properties", {}))
-                            merged_required.extend(resolved.get("required", []))
-                        if merged_props:
-                            outer["properties"] = merged_props
-                        if merged_required:
-                            outer["required"] = list(dict.fromkeys(merged_required))
-                        return outer, derived_from
+        versioned_groups: dict[str, list[str]] = {}  # base-name → list of refs
+        to_merge_refs: list[str] = []                # refs to inline-merge
+        inline_schemas: list[dict[str, Any]] = []    # non-pure-ref members
+        first_local_ref: str | None = None
 
-        merged: dict[str, Any] = {k: v for k, v in schema.items() if k != keyword}
-        merged_props: dict[str, Any] = dict(merged.pop("properties", {}))
-        merged_required: list[str] = list(merged.pop("required", []))
+        for member in members:
+            kind = self._classify_member(member)
+            ref = member.get("$ref", "")
+
+            if kind == "local":
+                if first_local_ref is None:
+                    first_local_ref = ref
+                else:
+                    to_merge_refs.append(ref)
+
+            elif kind in ("unversioned", "circular"):
+                to_merge_refs.append(ref)
+
+            elif kind == "versioned":
+                uri = ref.partition("#")[0]
+                m = self._VER_RE.match(Path(uri.split("/")[-1]).stem)
+                versioned_groups.setdefault(m.group(1), []).append(ref)  # type: ignore[union-attr]
+
+            else:  # "inline"
+                inline_schemas.append(member)
+
+        # ── Determine derived_from ────────────────────────────────────────────
+
         derived_from: str | None = None
 
-        for sub in members:
-            if "$ref" in sub and len(sub) == 1:
-                if derived_from is None:
-                    # First pure $ref → base type
-                    derived_from = self._ref_to_tosca_type(sub["$ref"])
-                else:
-                    # Additional pure $refs (anyOf/oneOf union) — merge properties
-                    if keyword in ("anyOf", "oneOf"):
-                        print(
-                            f"Warning: {keyword} has multiple $ref alternatives — "
-                            f"merging '{sub['$ref']}' properties; semantic union is lost",
-                            file=sys.stderr,
-                        )
-                    resolved = self._resolve_for_merge(sub["$ref"], root_schema)
-                    merged_props.update(resolved.get("properties", {}))
-                    merged_required.extend(resolved.get("required", []))
-            else:
-                resolved = self._resolve_for_merge(sub["$ref"], root_schema) if "$ref" in sub else sub
-                merged_props.update(resolved.get("properties", {}))
-                merged_required.extend(resolved.get("required", []))
-                for key in ("description", "title", "type"):
-                    if key in resolved and key not in merged:
-                        merged[key] = resolved[key]
+        if len(versioned_groups) == 1:
+            best = self._pick_latest_versioned_ref(next(iter(versioned_groups.values())))
+            if best is not None:
+                derived_from = self._ref_to_tosca_type(best)
+            # Any local ref defers to the versioned winner — merge it inline
+            if first_local_ref:
+                to_merge_refs.append(first_local_ref)
 
-        if merged_props:
-            merged["properties"] = merged_props
-        if merged_required:
-            seen: set[str] = set()
-            merged["required"] = [r for r in merged_required if not (r in seen or seen.add(r))]  # type: ignore[func-returns-value]
+        elif versioned_groups:
+            # Multiple versioned-base groups: can't pick one parent, merge all inline
+            for refs in versioned_groups.values():
+                to_merge_refs.extend(refs)
+            if first_local_ref:
+                derived_from = self._ref_to_tosca_type(first_local_ref)
 
-        return merged, derived_from
+        else:
+            # No versioned refs at all: first local ref (if any) is the parent
+            if first_local_ref:
+                derived_from = self._ref_to_tosca_type(first_local_ref)
+            # Otherwise: only unversioned/circular/inline members → no parent
+
+        # Warn when anyOf/oneOf has multiple refs whose union semantics are lost
+        if keyword in ("anyOf", "oneOf") and derived_from and to_merge_refs:
+            for ref in to_merge_refs:
+                if ref:
+                    print(
+                        f"Warning: {keyword} has multiple $ref alternatives — "
+                        f"merging '{ref}' properties; semantic union is lost",
+                        file=sys.stderr,
+                    )
+                    break  # one warning per schema is enough
+
+        # ── Merge inline ──────────────────────────────────────────────────────
+
+        # For a single unversioned/circular ref the outer schema's properties
+        # take priority (outer_wins=True); for multi-ref merges last-ref wins.
+        outer_wins = (
+            not inline_schemas
+            and len(to_merge_refs) == 1
+            and not derived_from
+        )
+        return self._merge_props_from(
+            to_merge_refs, inline_schemas, root_schema, outer, outer_wins=outer_wins
+        ), derived_from
 
     def collect_definitions(self, root_schema: dict[str, Any]) -> dict[str, Any]:
         """Collect all named sub-schemas from ``definitions`` and ``$defs``."""
