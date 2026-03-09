@@ -721,6 +721,70 @@ def test_circular_import_suppressed_for_direct_ref(tmp_path: Path):
     assert status_type == "string", f"Expected 'string', got: {status_type!r}"
 
 
+def test_circular_import_suppressed_transitive(tmp_path: Path):
+    """Transitive circular import via unversioned stub file is suppressed.
+
+    Scenario:
+      MainFile.json  --$ref-->  OtherFile.json  (unversioned)
+      OtherFile.json --$ref-->  OtherFile.v1_0_0.json  (versioned)
+      OtherFile.v1_0_0.json  --$ref-->  MainFile.json   ← closes the cycle
+
+    Converting MainFile.json must not produce an import for OtherFile.yaml.
+    The property using OtherFile.json should fall back to 'string'.
+    """
+    versioned_other = tmp_path / "OtherFile.v1_0_0.json"
+    versioned_other.write_text(json.dumps({
+        "$id": "http://example.com/OtherFile.v1_0_0.json",
+        "definitions": {
+            "Widget": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string"},
+                    "owner": {"$ref": "http://example.com/MainFile.json#/definitions/Owner"},
+                },
+            },
+        },
+    }))
+    stub_other = tmp_path / "OtherFile.json"
+    stub_other.write_text(json.dumps({
+        "$id": "http://example.com/OtherFile.json",
+        "definitions": {
+            "Widget": {
+                "anyOf": [
+                    {"$ref": "http://example.com/OtherFile.v1_0_0.json#/definitions/Widget"},
+                ],
+            },
+        },
+    }))
+    main_schema = {
+        "$id": "http://example.com/MainFile.json",
+        "definitions": {
+            "Owner": {"type": "object", "properties": {"id": {"type": "string"}}},
+            "Resource": {
+                "type": "object",
+                "properties": {
+                    "item": {
+                        "$ref": "http://example.com/OtherFile.json#/definitions/Widget",
+                        "description": "A widget item.",
+                    },
+                },
+            },
+        },
+    }
+    result = convert_schema(
+        main_schema, "MainFile",
+        base_path=tmp_path,
+        source_path=tmp_path / "MainFile.json",
+    )
+    # No import to OtherFile
+    assert not any("OtherFile" in v for v in result.imports.values()), \
+        f"Unexpected OtherFile import: {result.imports}"
+    # item property falls back to string (no properties resolved)
+    resource = result.data_types.get("Resource", {})
+    item_type = resource.get("properties", {}).get("item", {}).get("type", "")
+    assert item_type == "string", f"Expected 'string', got: {item_type!r}"
+
+
 # ── CLI integration tests ─────────────────────────────────────────────────────
 
 @pytest.fixture()

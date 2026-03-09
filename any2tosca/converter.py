@@ -170,13 +170,17 @@ class Converter:
 
     def _collect_no_import_files(self, root_schema: dict[str, Any]) -> None:
         """
-        Pre-scan all ``$ref`` values in *root_schema* and add any versioned
-        external files that reference the current file back to
-        ``_no_import_files``.
+        Pre-scan all ``$ref`` values in *root_schema* and add any external
+        files that would create a circular import to ``_no_import_files``.
 
-        This ensures the circular-import suppression is effective even for
-        direct ``$ref`` accesses (e.g. after null-stripping by the normalizer)
-        and not just for ``anyOf``/``allOf`` patterns.
+        Two cases are handled:
+
+        - **Versioned files** (``BaseName.vX_Y_Z``): checked directly — if
+          the file's content mentions the current filename, it references back.
+        - **Unversioned files** (e.g. ``LogEntry.json``): checked transitively
+          — if any versioned ref *inside* the unversioned file points to a file
+          that mentions the current filename, the whole unversioned file would
+          create a circular import chain and is suppressed.
         """
         if not self._current_filename:
             return
@@ -201,12 +205,17 @@ class Converter:
             uri = ref.partition("#")[0]
             if not uri:
                 continue
-            stem = Path(uri.split("/")[-1]).stem
-            if not _VER.match(stem):
-                continue  # unversioned — skip
             fname = Path(uri).name
-            if fname and fname not in self._no_import_files:
+            if not fname or fname in self._no_import_files:
+                continue
+            stem = Path(uri.split("/")[-1]).stem
+            if _VER.match(stem):
+                # Versioned file: direct check
                 if self._refs_back_to_current(ref):
+                    self._no_import_files.add(fname)
+            else:
+                # Unversioned file: transitive check through its versioned refs
+                if self._refs_back_to_current_transitive(ref):
                     self._no_import_files.add(fname)
 
     def _refs_back_to_current(self, ref: str) -> bool:
@@ -236,6 +245,59 @@ class Converter:
             return self._current_filename in content
         except OSError:
             return False
+
+    def _refs_back_to_current_transitive(self, ref: str) -> bool:
+        """
+        Transitive version of :meth:`_refs_back_to_current`.
+
+        Reads the file identified by *ref*, extracts all versioned external
+        ``$ref`` URIs from it, and returns ``True`` if any of those versioned
+        files directly reference the current file.
+
+        This handles chains like::
+
+            CurrentFile.json → OtherFile.json → OtherFile.vX_Y_Z.json → CurrentFile.json
+        """
+        if not self._current_filename:
+            return False
+        file_no_frag = ref.partition("#")[0]
+        if not file_no_frag:
+            return False
+        fname = Path(file_no_frag).name
+        candidate = next(
+            (d / fname for d in self._all_dirs() if (d / fname).exists()), None
+        )
+        if candidate is None:
+            return False
+        try:
+            doc = json.loads(candidate.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return False
+
+        _VER = re.compile(r"^(.+)\.v(\d+)[._](\d+)[._](\d+)")
+        nested_refs: set[str] = set()
+
+        def _collect(obj: Any) -> None:
+            if isinstance(obj, dict):
+                if "$ref" in obj and isinstance(obj["$ref"], str):
+                    nested_refs.add(obj["$ref"])
+                for v in obj.values():
+                    _collect(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    _collect(item)
+
+        _collect(doc)
+        for nested in nested_refs:
+            if nested.startswith("#"):
+                continue
+            nested_uri = nested.partition("#")[0]
+            nested_stem = Path(nested_uri.split("/")[-1]).stem
+            if not _VER.match(nested_stem):
+                continue
+            if self._refs_back_to_current(nested):
+                return True
+        return False
 
     def _rewrite_local_refs(self, obj: Any, file_part: str) -> Any:
         """
