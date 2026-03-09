@@ -673,6 +673,35 @@ class Converter:
 
     # ── Core conversion ───────────────────────────────────────────────────────
 
+    def _inline_type_or_primitive(
+        self,
+        type_name: str,
+        schema: dict[str, Any],
+        root_schema: dict[str, Any],
+        data_types: dict[str, Any],
+    ) -> str:
+        """
+        Given a schema resolved from a circular-import file, return an
+        appropriate TOSCA type name without creating an external import.
+
+        - If the schema has ``properties``, create a local data type named
+          *type_name* in *data_types* and return that name.
+        - Otherwise return the TOSCA primitive that best matches the schema
+          (e.g. ``"string"`` for enum types).
+        """
+        if any(k in schema for k in ("allOf", "anyOf", "oneOf")):
+            schema, _ = self._merge_allof(schema, root_schema)
+
+        json_type = schema.get("type")
+        if schema.get("properties") or json_type in ("object", None) and schema.get("properties"):
+            safe_name = self.sanitize_name(type_name)
+            if safe_name not in data_types:
+                data_types[safe_name] = self.schema_to_tosca_data_type(
+                    safe_name, schema, root_schema, data_types
+                )
+            return safe_name
+        return self.get_tosca_type(json_type, schema, root_schema)
+
     def schema_to_property(
         self,
         prop_name: str,
@@ -703,7 +732,11 @@ class Converter:
             if file_part is not None and Path(file_part).name in self._no_import_files:
                 # Referenced file would create a circular import — resolve the
                 # schema inline and fall through to normal type detection.
-                ref_schema = self.resolve_ref(ref, root_schema)
+                # Use _resolve_for_merge (not resolve_ref) so that any local
+                # #/... refs inside the resolved schema are rewritten to
+                # filename#/... — otherwise they resolve against root_schema
+                # where the types don't exist.
+                ref_schema = self._resolve_for_merge(ref, root_schema)
                 prop_schema = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
                 # fall through to inline processing below
             else:
@@ -757,7 +790,17 @@ class Converter:
         if tosca_type == "list":
             items = prop_schema.get("items", {})
             if "$ref" in items:
-                item_tosca_type = self._ref_to_tosca_type(items["$ref"])
+                item_ref = items["$ref"]
+                fp, item_type_name = self._parse_ref(item_ref)
+                if fp is not None and Path(fp).name in self._no_import_files:
+                    # Circular file — resolve inline
+                    item_schema = self._resolve_for_merge(item_ref, root_schema)
+                    item_schema = {**item_schema, **{k: v for k, v in items.items() if k != "$ref"}}
+                    item_tosca_type = self._inline_type_or_primitive(
+                        item_type_name, item_schema, root_schema, data_types
+                    )
+                else:
+                    item_tosca_type = self._ref_to_tosca_type(item_ref)
             else:
                 item_tosca_type = self.get_tosca_type(items.get("type"), items, root_schema)
             prop_def["entry_schema"] = {"type": item_tosca_type}
@@ -767,7 +810,16 @@ class Converter:
             add_props = prop_schema.get("additionalProperties", {})
             if isinstance(add_props, dict):
                 if "$ref" in add_props:
-                    val_type = self._ref_to_tosca_type(add_props["$ref"])
+                    ap_ref = add_props["$ref"]
+                    fp, ap_type_name = self._parse_ref(ap_ref)
+                    if fp is not None and Path(fp).name in self._no_import_files:
+                        ap_schema = self._resolve_for_merge(ap_ref, root_schema)
+                        ap_schema = {**ap_schema, **{k: v for k, v in add_props.items() if k != "$ref"}}
+                        val_type = self._inline_type_or_primitive(
+                            ap_type_name, ap_schema, root_schema, data_types
+                        )
+                    else:
+                        val_type = self._ref_to_tosca_type(ap_ref)
                 else:
                     val_type = self.get_tosca_type(add_props.get("type"), add_props, root_schema)
                 prop_def["entry_schema"] = {"type": val_type}
