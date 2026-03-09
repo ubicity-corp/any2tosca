@@ -664,6 +664,63 @@ def test_anyof_versioned_ref_local_refs_rewritten(tmp_path: Path):
         f"Expected namespaced type for 'context', got: {context_type!r}"
 
 
+def test_circular_import_suppressed_for_direct_ref(tmp_path: Path):
+    """Direct $ref to a versioned file that refs back must not create an import.
+
+    Scenario: MainFile.json has a definition with a property whose $ref
+    points directly to MainFile.v1_0_0.json (after normalizer null-stripping).
+    Since MainFile.v1_0_0.json references back to MainFile.json, recording an
+    import would create a circular dependency.  The converter must resolve the
+    referenced type inline instead.
+    """
+    # The versioned file references back to main via an explicit $ref
+    versioned = tmp_path / "MainFile.v1_0_0.json"
+    versioned.write_text(json.dumps({
+        "$id": "http://example.com/MainFile.v1_0_0.json",
+        "definitions": {
+            "StatusType": {
+                "type": "string",
+                "enum": ["OK", "Warning", "Critical"],
+                "description": "The resource status.",
+            },
+            "Resource": {
+                "type": "object",
+                "properties": {
+                    "Oem": {"$ref": "http://example.com/MainFile.json#/definitions/Oem"},
+                },
+            },
+        },
+    }))
+    # The main file has a direct $ref to the versioned file (simulating normalizer output)
+    main_schema = {
+        "$id": "http://example.com/MainFile.json",
+        "definitions": {
+            "Oem": {"type": "object"},
+            "Resource": {
+                "type": "object",
+                "properties": {
+                    "Status": {
+                        "$ref": "http://example.com/MainFile.v1_0_0.json#/definitions/StatusType",
+                        "description": "The health status.",
+                    },
+                },
+            },
+        },
+    }
+    result = convert_schema(
+        main_schema, "MainFile",
+        base_path=tmp_path,
+        source_path=tmp_path / "MainFile.json",
+    )
+    # No import to the versioned file
+    assert not any("v1_0_0" in v for v in result.imports.values()), \
+        f"Unexpected import to versioned file: {result.imports}"
+    # Status property resolved inline as string
+    resource = result.data_types.get("Resource", {})
+    status_type = resource.get("properties", {}).get("Status", {}).get("type", "")
+    assert status_type == "string", f"Expected 'string', got: {status_type!r}"
+
+
 # ── CLI integration tests ─────────────────────────────────────────────────────
 
 @pytest.fixture()

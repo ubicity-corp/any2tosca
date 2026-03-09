@@ -142,7 +142,7 @@ def main_json(argv: list[str] | None = None) -> int:
 
         top_name = root_schema.get("title") or schema_path.stem
         result = convert_schema(root_schema, top_name, base_path=schema_path.parent,
-                                search_paths=search_paths)
+                                search_paths=search_paths, source_path=schema_path)
         _report(result, args.verbose, schema_path)
         if not result.data_types and not result.node_types:
             continue
@@ -201,7 +201,8 @@ def main_redfish(argv: list[str] | None = None) -> int:
         top_name = next(iter(node_type_names), None) or schema_path.stem
         result = converter.convert_schema(root_schema, top_name, node_type_names,
                                           base_path=schema_path.parent,
-                                          search_paths=search_paths)
+                                          search_paths=search_paths,
+                                          source_path=schema_path)
         _report(result, args.verbose, schema_path)
         if not result.data_types and not result.node_types:
             continue
@@ -261,7 +262,8 @@ def main_oas(argv: list[str] | None = None) -> int:
         top_name = openapi_doc.get("info", {}).get("title") or api_path.stem
         result = converter.convert_schema(root_schema, top_name, node_type_names,
                                           base_path=api_path.parent,
-                                          search_paths=search_paths)
+                                          search_paths=search_paths,
+                                          source_path=api_path)
         _report(result, args.verbose, api_path)
         if not result.data_types and not result.node_types:
             continue
@@ -315,7 +317,8 @@ def main_yang(argv: list[str] | None = None) -> int:
         top_name = normalizer.module_name or yang_path.stem
         result = converter.convert_schema(root_schema, top_name, node_type_names,
                                           base_path=yang_path.parent,
-                                          search_paths=search_paths)
+                                          search_paths=search_paths,
+                                          source_path=yang_path)
         _report(result, args.verbose, yang_path)
         if not result.data_types and not result.node_types:
             continue

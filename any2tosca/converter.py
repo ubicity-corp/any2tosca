@@ -44,8 +44,10 @@ class Converter:
         self._base_path: Path | None = None
         self._search_paths: list[Path] = []     # additional schema search dirs
         self._imports: dict[str, str] = {}      # namespace → tosca_file
+        self._no_import_files: set[str] = set() # filenames whose types are treated as local
         self._registry: Registry | None = None  # referencing Registry
         self._id_to_path: dict[str, Path] = {}  # $id URI → local Path
+        self._current_filename: str = ""        # filename of the schema being converted
 
     def _all_dirs(self) -> list[Path]:
         """All directories to search for schema files, base path first."""
@@ -166,6 +168,75 @@ class Converter:
         """Derive the expected TOSCA output filename for a JSON Schema file."""
         return Path(file_part).stem + ".yaml"
 
+    def _collect_no_import_files(self, root_schema: dict[str, Any]) -> None:
+        """
+        Pre-scan all ``$ref`` values in *root_schema* and add any versioned
+        external files that reference the current file back to
+        ``_no_import_files``.
+
+        This ensures the circular-import suppression is effective even for
+        direct ``$ref`` accesses (e.g. after null-stripping by the normalizer)
+        and not just for ``anyOf``/``allOf`` patterns.
+        """
+        if not self._current_filename:
+            return
+        _VER = re.compile(r"^(.+)\.v(\d+)[._](\d+)[._](\d+)")
+        seen: set[str] = set()
+
+        def _collect(obj: Any) -> None:
+            if isinstance(obj, dict):
+                if "$ref" in obj and isinstance(obj["$ref"], str):
+                    seen.add(obj["$ref"])
+                for v in obj.values():
+                    _collect(v)
+            elif isinstance(obj, list):
+                for item in obj:
+                    _collect(item)
+
+        _collect(root_schema)
+
+        for ref in seen:
+            if ref.startswith("#"):
+                continue
+            uri = ref.partition("#")[0]
+            if not uri:
+                continue
+            stem = Path(uri.split("/")[-1]).stem
+            if not _VER.match(stem):
+                continue  # unversioned — skip
+            fname = Path(uri).name
+            if fname and fname not in self._no_import_files:
+                if self._refs_back_to_current(ref):
+                    self._no_import_files.add(fname)
+
+    def _refs_back_to_current(self, ref: str) -> bool:
+        """
+        Return ``True`` if the external file identified by *ref* contains any
+        ``$ref`` pointing back to the file currently being converted.
+
+        This detects potential circular imports (e.g. ``Resource.json`` has
+        ``anyOf → Resource.v1_23_0.json``, but ``Resource.v1_23_0.json``
+        also references ``Resource.json`` for stable shared types).  When a
+        circular import would result from using the versioned ref as
+        ``derived_from``, the caller should merge properties inline instead.
+        """
+        if not self._current_filename:
+            return False
+        file_no_frag = ref.partition("#")[0]
+        if not file_no_frag:
+            return False
+        fname = Path(file_no_frag).name
+        candidate = next(
+            (d / fname for d in self._all_dirs() if (d / fname).exists()), None
+        )
+        if candidate is None:
+            return False
+        try:
+            content = candidate.read_text(encoding="utf-8")
+            return self._current_filename in content
+        except OSError:
+            return False
+
     def _rewrite_local_refs(self, obj: Any, file_part: str) -> Any:
         """
         Recursively rewrite ``$ref`` values that start with ``#/`` to be
@@ -216,6 +287,14 @@ class Converter:
             return "string"
         if file_part is None:
             return type_name  # local ref
+        # Ref points back to the file being converted — the type is defined in the
+        # same TOSCA output file, so no import is needed.
+        if self._current_filename and Path(file_part).name == self._current_filename:
+            return type_name
+        # File was merged inline to avoid a circular import — treat all its types
+        # as locally defined (they appear in the inline-merged properties).
+        if Path(file_part).name in self._no_import_files:
+            return type_name
         namespace = self._namespace_for(file_part)
         self._imports[namespace] = self._tosca_file_for(file_part)
         return f"{namespace}:{type_name}"
@@ -407,6 +486,23 @@ class Converter:
                                     resolved["required"] + outer.get("required", [])
                                 ))
                             return outer, None
+                    # Versioned external ref that references the current file
+                    # back would create a circular import — merge inline instead.
+                    if self._refs_back_to_current(ref):
+                        fname = Path(ref.partition("#")[0]).name
+                        if fname:
+                            self._no_import_files.add(fname)
+                        resolved = self._resolve_for_merge(ref, root_schema)
+                        if resolved.get("properties"):
+                            outer["properties"] = {
+                                **resolved.get("properties", {}),
+                                **outer.get("properties", {}),
+                            }
+                        if resolved.get("required"):
+                            outer["required"] = list(dict.fromkeys(
+                                resolved["required"] + outer.get("required", [])
+                            ))
+                        return outer, None
                     # Local ref or versioned external ref → derived_from
                     return outer, self._ref_to_tosca_type(ref)
                 return self._merge_allof({**single, **outer}, root_schema)
@@ -434,6 +530,25 @@ class Converter:
                     )
                     if best is not None:
                         outer = {k: v for k, v in schema.items() if k != keyword}
+                        # If the versioned file references the current file back,
+                        # using it as derived_from would create a circular import.
+                        # Merge all refs inline instead.
+                        if self._refs_back_to_current(best):
+                            for ref in pure_refs:
+                                fname = Path(ref.partition("#")[0]).name
+                                if fname:
+                                    self._no_import_files.add(fname)
+                            merged_props_ci: dict[str, Any] = {}
+                            merged_required_ci: list[str] = []
+                            for ref in pure_refs:
+                                resolved = self._resolve_for_merge(ref, root_schema)
+                                merged_props_ci.update(resolved.get("properties", {}))
+                                merged_required_ci.extend(resolved.get("required", []))
+                            if merged_props_ci:
+                                outer["properties"] = merged_props_ci
+                            if merged_required_ci:
+                                outer["required"] = list(dict.fromkeys(merged_required_ci))
+                            return outer, None
                         derived_from = self._ref_to_tosca_type(best)
                         if not unversioned:
                             return outer, derived_from
@@ -521,17 +636,26 @@ class Converter:
 
         # $ref → use the referenced TOSCA data type name directly
         if "$ref" in prop_schema:
-            ref_type_name = self._ref_to_tosca_type(prop_schema["$ref"])
-            ref_schema = self.resolve_ref(prop_schema["$ref"], root_schema)
-            merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
-            prop_def: dict[str, Any] = {"type": ref_type_name}
-            description = merged.get("description") or merged.get("title")
-            if description:
-                prop_def["description"] = FoldedStr(description)
-            prop_def["required"] = prop_name in required_props
-            if "default" in merged:
-                prop_def["default"] = merged["default"]
-            return prop_def
+            ref = prop_schema["$ref"]
+            file_part, _ = self._parse_ref(ref)
+            if file_part is not None and Path(file_part).name in self._no_import_files:
+                # Referenced file would create a circular import — resolve the
+                # schema inline and fall through to normal type detection.
+                ref_schema = self.resolve_ref(ref, root_schema)
+                prop_schema = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
+                # fall through to inline processing below
+            else:
+                ref_type_name = self._ref_to_tosca_type(ref)
+                ref_schema = self.resolve_ref(ref, root_schema)
+                merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
+                prop_def: dict[str, Any] = {"type": ref_type_name}
+                description = merged.get("description") or merged.get("title")
+                if description:
+                    prop_def["description"] = FoldedStr(description)
+                prop_def["required"] = prop_name in required_props
+                if "default" in merged:
+                    prop_def["default"] = merged["default"]
+                return prop_def
 
         json_type = prop_schema.get("type")
 
@@ -668,6 +792,7 @@ class Converter:
         node_type_names: frozenset[str] | set[str] = frozenset(),
         base_path: Path | None = None,
         search_paths: list[Path] | None = None,
+        source_path: Path | None = None,
     ) -> ConversionResult:
         """
         Convert an entire JSON Schema document to TOSCA types.
@@ -686,6 +811,10 @@ class Converter:
         search_paths:
             Additional directories to search for referenced schema files,
             consulted after ``base_path``.
+        source_path:
+            Path to the source schema file being converted.  Used to detect
+            potential circular imports when the source file's filename cannot
+            be inferred from the schema's ``$id`` (e.g. after normalization).
 
         Returns
         -------
@@ -697,6 +826,12 @@ class Converter:
         self._registry = None   # rebuild for new base_path / search_paths
         self._id_to_path = {}
         self._imports = {}
+        self._no_import_files = set()
+        self._current_filename = (
+            source_path.name if source_path
+            else Path(root_schema.get("$id", "")).name
+        )
+        self._collect_no_import_files(root_schema)
         data_types: dict[str, Any] = {}
         node_types: dict[str, Any] = {}
 
@@ -750,9 +885,10 @@ def convert_schema(
     node_type_names: frozenset[str] | set[str] = frozenset(),
     base_path: Path | None = None,
     search_paths: list[Path] | None = None,
+    source_path: Path | None = None,
 ) -> ConversionResult:
     return Converter().convert_schema(root_schema, top_level_name, node_type_names,
-                                      base_path, search_paths)
+                                      base_path, search_paths, source_path)
 
 
 def build_tosca_document(
