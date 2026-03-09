@@ -541,6 +541,40 @@ def test_external_ref_http_uri_filename_fallback(tmp_path: Path):
     assert "odatav4" in result.imports
 
 
+def test_anyof_single_unversioned_external_ref_no_derived_from():
+    """anyOf with a single unversioned external ref does not set derived_from.
+
+    Redfish collection schemas use anyOf: [idRef] as a link-reference pattern,
+    not inheritance.  Making the node type derive from idRef (a data type)
+    would be invalid TOSCA.
+    """
+    schema = {
+        "type": "object",
+        "anyOf": [
+            {"$ref": "http://redfish.dmtf.org/schemas/v1/odata-v4.json#/definitions/idRef"}
+        ],
+        "description": "A collection of items.",
+    }
+    result = convert_schema(schema, "MyCollection", node_type_names={"MyCollection"})
+    node = result.node_types.get("MyCollection", {})
+    assert "derived_from" not in node
+    assert node.get("description") == "A collection of items."
+
+
+def test_anyof_single_versioned_external_ref_uses_derived_from(tmp_path: Path):
+    """anyOf with a single versioned external ref still sets derived_from."""
+    ext = tmp_path / "Base.v1_0_0.json"
+    ext.write_text(json.dumps({"$id": "Base.v1_0_0.json", "type": "object"}))
+    schema = {
+        "type": "object",
+        "anyOf": [{"$ref": "Base.v1_0_0.json"}],
+    }
+    result = convert_schema(schema, "Child", base_path=tmp_path)
+    dt = result.data_types.get("Child", {})
+    assert "derived_from" in dt
+    assert "basev100" in dt["derived_from"].lower() or "Base" in dt["derived_from"]
+
+
 def test_build_tosca_document_with_imports():
     """imports dict is rendered as a TOSCA imports list."""
     doc = Converter().build_tosca_document(

@@ -356,7 +356,10 @@ class Converter:
         ``anyOf`` / ``oneOf`` handling:
 
         - Null-only members are stripped first.
-        - If a single non-null member remains it is flattened (nullable pattern).
+        - If a single non-null member remains: versioned external refs and local
+          refs become ``derived_from``; unversioned external refs (e.g. ``idRef``)
+          represent link patterns, not inheritance — their properties are merged
+          inline and ``derived_from`` is left unset.
         - Versioned ``$refs`` (``BaseName.vX_Y_Z``) identify the actual resource
           type; the latest version becomes ``derived_from`` and properties from
           any remaining (unversioned) ``$refs`` are merged in.
@@ -380,8 +383,32 @@ class Converter:
                 outer = {k: v for k, v in schema.items() if k != keyword}
                 single = members[0]
                 if "$ref" in single and len(single) == 1:
-                    # Single pure $ref → derived_from
-                    return outer, self._ref_to_tosca_type(single["$ref"])
+                    ref = single["$ref"]
+                    if not ref.startswith("#"):
+                        # External ref: only use as derived_from if it is a
+                        # versioned resource ref (BaseName.vX_Y_Z).  Unversioned
+                        # external refs (e.g. idRef) represent a link/reference
+                        # pattern, not true type inheritance — merging their
+                        # properties inline avoids mixing data-type and node-type
+                        # hierarchies in TOSCA.
+                        _VER = re.compile(r"^(.+)\.v(\d+)[._](\d+)[._](\d+)")
+                        uri = ref.partition("#")[0]
+                        stem = Path(uri.split("/")[-1]).stem
+                        if not _VER.match(stem):
+                            # Unversioned external ref → merge inline, no derived_from
+                            resolved = self._resolve_for_merge(ref, root_schema)
+                            if resolved.get("properties"):
+                                outer["properties"] = {
+                                    **resolved.get("properties", {}),
+                                    **outer.get("properties", {}),
+                                }
+                            if resolved.get("required"):
+                                outer["required"] = list(dict.fromkeys(
+                                    resolved["required"] + outer.get("required", [])
+                                ))
+                            return outer, None
+                    # Local ref or versioned external ref → derived_from
+                    return outer, self._ref_to_tosca_type(ref)
                 return self._merge_allof({**single, **outer}, root_schema)
 
             # Multiple pure $refs: separate versioned (BaseName.vX_Y_Z) from others.
