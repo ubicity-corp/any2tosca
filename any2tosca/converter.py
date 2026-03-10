@@ -1181,6 +1181,39 @@ class Converter:
             node_type["requirements"] = requirements
             node_types[name] = node_type
 
+        # Post-processing: remove property redefinitions in derived types that
+        # would relax a required:true constraint set by an ancestor.  TOSCA
+        # forbids relaxing constraints, so the inherited definition stands.
+        all_types: dict[str, Any] = {**data_types, **node_types}
+        for type_def in list(data_types.values()) + list(node_types.values()):
+            derived_from = type_def.get("derived_from")
+            if not derived_from:
+                continue
+            # Collect property names that are required:true in any ancestor.
+            ancestor_required: set[str] = set()
+            visited: set[str] = set()
+            stack = [derived_from]
+            while stack:
+                ancestor_name = stack.pop()
+                if ancestor_name in visited or ":" in ancestor_name:
+                    continue
+                visited.add(ancestor_name)
+                ancestor = all_types.get(ancestor_name)
+                if not ancestor:
+                    continue
+                for pname, pdef in ancestor.get("properties", {}).items():
+                    if pdef.get("required", False):
+                        ancestor_required.add(pname)
+                if ancestor.get("derived_from"):
+                    stack.append(ancestor["derived_from"])
+            # Drop any child property that relaxes a required:true ancestor constraint.
+            child_props = type_def.get("properties", {})
+            for pname in [p for p in child_props if p in ancestor_required
+                          and not child_props[p].get("required", False)]:
+                del child_props[pname]
+            if not child_props:
+                type_def.pop("properties", None)
+
         # Every node type can be the target of a core:Contains requirement,
         # so add the core:Containable capability to all of them.
         if node_types:
