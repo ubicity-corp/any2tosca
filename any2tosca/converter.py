@@ -63,8 +63,9 @@ class Converter:
         self._file_cache: dict[str, str] = {}          # abs path → raw text
         self._doc_cache: dict[str, dict[str, Any]] = {}# abs path → parsed JSON
         self._fname_to_path: dict[str, Path | None] = {}  # filename → abs Path (or None)
+        self._ref_fnames_cache: dict[str, frozenset[str]] = {}  # abs path → ext fnames
+        self._transitive_back_cache: dict[tuple[str, str], bool] = {}  # (start,cur) → bool
         # Per-conversion state (reset each convert_schema call)
-        self._transitive_back_cache: dict[str, bool] = {}  # start_fname → bool
         self._expanded_link_types: set[str] = set()        # types expanded from Links props
         self._node_type_names: set[str] = set() # names that are node types in this file
 
@@ -368,8 +369,9 @@ class Converter:
         if not start_fname:
             return False
 
-        if start_fname in self._transitive_back_cache:
-            return self._transitive_back_cache[start_fname]
+        cache_key = (start_fname, self._current_filename)
+        if cache_key in self._transitive_back_cache:
+            return self._transitive_back_cache[cache_key]
 
         visited: set[str] = set()
         queue: list[str] = [start_fname]
@@ -395,13 +397,18 @@ class Converter:
             if self._current_filename in text:
                 result = True
                 break
-            doc = self._load_cached_doc(fname)
-            if doc is None:
-                continue
-            for nested_fname in self._collect_ref_fnames(doc):
+            # Use cached set of external filenames (avoids re-walking the JSON
+            # tree on every BFS call — the biggest CPU cost before this cache).
+            if key not in self._ref_fnames_cache:
+                doc = self._load_cached_doc(fname)
+                self._ref_fnames_cache[key] = (
+                    frozenset(self._collect_ref_fnames(doc)) if doc is not None
+                    else frozenset()
+                )
+            for nested_fname in self._ref_fnames_cache[key]:
                 if nested_fname not in visited:
                     queue.append(nested_fname)
-        self._transitive_back_cache[start_fname] = result
+        self._transitive_back_cache[cache_key] = result
         return result
 
     def _rewrite_local_refs(self, obj: Any, file_part: str) -> Any:
@@ -1237,11 +1244,12 @@ class Converter:
             self._file_cache = {}
             self._doc_cache = {}
             self._fname_to_path = {}
+            self._ref_fnames_cache = {}
+            self._transitive_back_cache = {}
         self._base_path = base_path
         self._search_paths = new_search_paths
         self._imports = {}
         self._no_import_files = set()
-        self._transitive_back_cache = {}
         self._expanded_link_types = set()
         self._current_filename = (
             source_path.name if source_path
