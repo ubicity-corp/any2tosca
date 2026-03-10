@@ -317,51 +317,78 @@ class Converter:
                 self._file_cache[key] = ""
         return bool(self._file_cache[key]) and self._current_filename in self._file_cache[key]
 
+    def _collect_ref_fnames(self, obj: Any) -> set[str]:
+        """Collect all external JSON Schema filenames referenced in *obj*."""
+        fnames: set[str] = set()
+
+        def _walk(o: Any) -> None:
+            if isinstance(o, dict):
+                ref = o.get("$ref")
+                if isinstance(ref, str) and not ref.startswith("#"):
+                    file_part = ref.partition("#")[0]
+                    fname = Path(file_part).name if file_part else ""
+                    if fname:
+                        fnames.add(fname)
+                for v in o.values():
+                    _walk(v)
+            elif isinstance(o, list):
+                for item in o:
+                    _walk(item)
+
+        _walk(obj)
+        return fnames
+
     def _refs_back_to_current_transitive(self, ref: str) -> bool:
         """
-        Transitive version of :meth:`_refs_back_to_current`.
+        Return ``True`` if the current file is transitively reachable from
+        *ref* via any chain of external ``$ref`` pointers.
 
-        Reads the file identified by *ref*, extracts all versioned external
-        ``$ref`` URIs from it, and returns ``True`` if any of those versioned
-        files directly reference the current file.
+        Uses breadth-first search through all reachable files, stopping as
+        soon as any file is found whose raw text mentions the current filename.
+        This handles arbitrarily deep chains such as::
 
-        This handles chains like::
-
-            CurrentFile.json → OtherFile.json → OtherFile.vX_Y_Z.json → CurrentFile.json
+            CurrentFile.json → A.json → A.vX_Y_Z.json → B.json
+                → B.vX_Y_Z.json → CurrentFile.json
         """
         if not self._current_filename:
             return False
         file_no_frag = ref.partition("#")[0]
         if not file_no_frag:
             return False
-        fname = Path(file_no_frag).name
-        doc = self._load_cached_doc(fname)
-        if doc is None:
+        start_fname = Path(file_no_frag).name
+        if not start_fname:
             return False
 
-        _VER = self._VER_RE
-        nested_refs: set[str] = set()
-
-        def _collect(obj: Any) -> None:
-            if isinstance(obj, dict):
-                if "$ref" in obj and isinstance(obj["$ref"], str):
-                    nested_refs.add(obj["$ref"])
-                for v in obj.values():
-                    _collect(v)
-            elif isinstance(obj, list):
-                for item in obj:
-                    _collect(item)
-
-        _collect(doc)
-        for nested in nested_refs:
-            if nested.startswith("#"):
+        visited: set[str] = set()
+        queue: list[str] = [start_fname]
+        while queue:
+            fname = queue.pop(0)
+            if fname in visited:
                 continue
-            nested_uri = nested.partition("#")[0]
-            nested_stem = Path(nested_uri.split("/")[-1]).stem
-            if not _VER.match(nested_stem):
+            visited.add(fname)
+            # Ensure raw text is cached for the fast text-search below.
+            candidate = next(
+                (d / fname for d in self._all_dirs() if (d / fname).exists()), None
+            )
+            if candidate is None:
                 continue
-            if self._refs_back_to_current(nested):
+            key = str(candidate)
+            if key not in self._file_cache:
+                try:
+                    self._file_cache[key] = candidate.read_text(encoding="utf-8")
+                except OSError:
+                    self._file_cache[key] = ""
+            text = self._file_cache[key]
+            if not text:
+                continue
+            if self._current_filename in text:
                 return True
+            doc = self._load_cached_doc(fname)
+            if doc is None:
+                continue
+            for nested_fname in self._collect_ref_fnames(doc):
+                if nested_fname not in visited:
+                    queue.append(nested_fname)
         return False
 
     def _rewrite_local_refs(self, obj: Any, file_part: str) -> Any:
