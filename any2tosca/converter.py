@@ -63,8 +63,9 @@ class Converter:
         self._file_cache: dict[str, str] = {}          # abs path → raw text
         self._doc_cache: dict[str, dict[str, Any]] = {}# abs path → parsed JSON
         self._fname_to_path: dict[str, Path | None] = {}  # filename → abs Path (or None)
-        # Per-conversion cache (reset each convert_schema call)
+        # Per-conversion state (reset each convert_schema call)
         self._transitive_back_cache: dict[str, bool] = {}  # start_fname → bool
+        self._expanded_link_types: set[str] = set()        # types expanded from Links props
         self._node_type_names: set[str] = set() # names that are node types in this file
 
     def _all_dirs(self) -> list[Path]:
@@ -920,6 +921,57 @@ class Converter:
                 plain_props[pname] = pdef
         return plain_props, requirements
 
+    def _expand_links_prop(
+        self,
+        links_ref: str,
+        root_schema: dict[str, Any],
+        data_types: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Expand a Redfish ``Links`` property into TOSCA ``DependsOn`` requirements.
+
+        Resolves the Links definition identified by *links_ref*, processes each
+        of its properties, and returns a list of TOSCA requirement dicts for
+        those that reference node types.  The requirements use
+        ``core:DependsOn`` / ``core:Feature`` to express "related but not
+        contained" relationships, as intended by the Redfish Links pattern.
+
+        Also records the type name in ``_expanded_link_types`` so the now-
+        unused Links data/node type can be removed after conversion.
+        """
+        _, type_name = self._parse_ref(links_ref)
+        if type_name:
+            self._expanded_link_types.add(type_name)
+
+        resolved = self._resolve_for_merge(links_ref, root_schema)
+        requirements: list[dict[str, Any]] = []
+        for pname, pschema in resolved.get("properties", {}).items():
+            safe_name = self.sanitize_name(pname)
+            prop_def = self.schema_to_property(pname, pschema, [], root_schema, data_types)
+            prop_type = prop_def.get("type", "")
+            if prop_type == "list":
+                entry_type = (prop_def.get("entry_schema") or {}).get("type", "")
+                if not self._is_node_type_tosca(entry_type):
+                    continue
+                node_type = entry_type
+                count_range: list[Any] = [0, "UNBOUNDED"]
+            elif self._is_node_type_tosca(prop_type):
+                node_type = prop_type
+                count_range = [0, 1]
+            else:
+                continue
+            self._imports["core"] = "Core.yaml"
+            req: dict[str, Any] = {
+                "node": node_type,
+                "capability": "core:Feature",
+                "relationship": "core:DependsOn",
+                "count_range": count_range,
+            }
+            description = prop_def.get("description")
+            if description:
+                req["description"] = description
+            requirements.append({safe_name: req})
+        return requirements
+
     # ── Core conversion ───────────────────────────────────────────────────────
 
     def _build_simple_prop_def(
@@ -1086,15 +1138,31 @@ class Converter:
         required_list: list[str] = schema.get("required", [])
 
         if properties_schema:
+            links_requirements: list[dict[str, Any]] = []
+            regular_props: dict[str, Any] = {}
+            for pname, pschema in properties_schema.items():
+                # Detect the Redfish Links pattern: a property named "Links"
+                # whose $ref resolves to a type also named "Links".  Expand
+                # it into core:DependsOn requirements rather than a property.
+                if (is_node_type and pname == "Links"
+                        and isinstance(pschema, dict) and "$ref" in pschema
+                        and self._parse_ref(pschema["$ref"])[1] == "Links"):
+                    links_requirements.extend(
+                        self._expand_links_prop(pschema["$ref"], root_schema, data_types)
+                    )
+                else:
+                    regular_props[pname] = pschema
+
             all_props = {
                 self.sanitize_name(pname): self.schema_to_property(
                     pname, pschema, required_list, root_schema, data_types
                 )
-                for pname, pschema in properties_schema.items()
+                for pname, pschema in regular_props.items()
             }
             if is_node_type:
                 # Properties referencing node types become TOSCA requirements.
                 plain_props, requirements = self._split_props_and_requirements(all_props)
+                requirements.extend(links_requirements)
                 if plain_props:
                     tosca_type["properties"] = plain_props
                 if requirements:
@@ -1183,6 +1251,7 @@ class Converter:
         self._imports = {}
         self._no_import_files = set()
         self._transitive_back_cache = {}
+        self._expanded_link_types = set()
         self._current_filename = (
             source_path.name if source_path
             else Path(root_schema.get("$id", "")).name
@@ -1259,6 +1328,12 @@ class Converter:
                 del child_props[pname]
             if not child_props:
                 type_def.pop("properties", None)
+
+        # Remove Links container types that were expanded inline into parent
+        # node types as DependsOn requirements — they are no longer referenced.
+        for name in self._expanded_link_types:
+            data_types.pop(name, None)
+            node_types.pop(name, None)
 
         # Every node type can be the target of a core:Contains requirement,
         # so add the core:Containable capability to all of them.

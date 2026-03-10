@@ -203,3 +203,62 @@ def test_end_to_end():
     assert "@odata.id" not in drive_props
     assert "CapacityBytes" in drive_props
     assert drive_props["CapacityBytes"]["type"] == "integer"
+
+
+# ── Redfish Links pattern expansion ───────────────────────────────────────────
+
+# Schema with a node type that has a Links property referencing a Links def.
+# The Links def contains a node-type reference (OtherResource) and a plain
+# property (Oem).  Expected: Links expands into a DependsOn requirement;
+# no Links property or Links type remains.
+REDFISH_WITH_LINKS = {
+    "$ref": "#/definitions/Widget",
+    "definitions": {
+        "Widget": {
+            "type": "object",
+            "description": "A widget resource.",
+            "properties": {
+                "@odata.id":   {"type": "string"},
+                "Id":          {"type": "string"},
+                "Name":        {"type": "string"},
+                "Links": {"$ref": "#/definitions/Links"},
+            },
+        },
+        "Links": {
+            "type": "object",
+            "description": "Related resources.",
+            "properties": {
+                "RelatedThing": {"$ref": "#/definitions/Thing"},
+                "Oem":          {"type": "object"},
+            },
+        },
+        "Thing": {
+            "type": "object",
+            "description": "A related resource.",
+            "properties": {
+                "@odata.id": {"type": "string"},
+                "Id":        {"type": "string"},
+            },
+        },
+    },
+}
+
+
+def test_links_property_expanded_to_requirements():
+    """Links property is expanded into DependsOn requirements, not kept as property."""
+    root, node_type_names = n.normalize(REDFISH_WITH_LINKS)
+    # Manually add Thing as a node type (simulating Redfish resource detection)
+    node_type_names = node_type_names | {"Thing", "Widget"}
+    result = Converter().convert_schema(root, "Widget", node_type_names)
+
+    widget = result.node_types["Widget"]
+    # Links property must not appear
+    assert "Links" not in widget.get("properties", {})
+    # RelatedThing must appear as a DependsOn requirement
+    reqs = {k: v for req in widget.get("requirements", []) for k, v in req.items()}
+    assert "RelatedThing" in reqs
+    assert reqs["RelatedThing"]["relationship"] == "core:DependsOn"
+    assert reqs["RelatedThing"]["capability"] == "core:Feature"
+    # Links type must not remain in output
+    assert "Links" not in result.data_types
+    assert "Links" not in result.node_types
