@@ -133,9 +133,7 @@ class Converter:
             uri_no_frag, _, fragment = ref.partition("#")
             # Fast path: match by filename extracted from the URI (works for most schemas).
             fname = Path(uri_no_frag).name
-            file_path: Path | None = next(
-                (d / fname for d in self._all_dirs() if (d / fname).exists()), None
-            )
+            file_path = self._resolve_fname(fname)
             # Slow path: consult the $id registry for schemas whose URI doesn't
             # end with the same filename as the local file.
             if file_path is None:
@@ -502,29 +500,22 @@ class Converter:
         if self._base_path is None:
             return {}
 
-        # Fast path: load file directly by filename extracted from the ref.
+        # Fast path: load file via cache, then navigate to the fragment.
         file_no_frag, _, fragment = ref.partition("#")
         if file_no_frag:
             fname = Path(file_no_frag).name
-            candidate = next(
-                (d / fname for d in self._all_dirs() if (d / fname).exists()), None
-            )
-            if candidate is not None:
-                try:
-                    with open(candidate, encoding="utf-8") as fh:
-                        doc = json.load(fh)
-                    if fragment:
-                        node: Any = doc
-                        for part in fragment.lstrip("/").split("/"):
-                            if isinstance(node, dict) and part in node:
-                                node = node[part]
-                            else:
-                                node = {}
-                                break
-                        return node if isinstance(node, dict) else {}
-                    return doc if isinstance(doc, dict) else {}
-                except (OSError, json.JSONDecodeError):
-                    pass
+            doc = self._load_cached_doc(fname)
+            if doc is not None:
+                if fragment:
+                    node: Any = doc
+                    for part in fragment.lstrip("/").split("/"):
+                        if isinstance(node, dict) and part in node:
+                            node = node[part]
+                        else:
+                            node = {}
+                            break
+                    return node if isinstance(node, dict) else {}
+                return doc
 
         # Slow path: consult the referencing.Registry for complex URI resolution.
         registry, _ = self._get_registry()
