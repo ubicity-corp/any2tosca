@@ -7,6 +7,7 @@ Pre-processor that normalizes Redfish JSON Schema for use with the Converter.
 from __future__ import annotations
 
 import copy
+import re
 from typing import Any
 
 __all__ = ["RedfishNormalizer"]
@@ -84,17 +85,25 @@ class RedfishNormalizer:
             return ref.split("/")[-1]
         return None
 
+    #: Matches Redfish version suffix segments like ``v1_7_0`` or ``v1.7.0``.
+    _VER_SEGMENT = re.compile(r"^v\d+[._]\d+[._]\d+")
+
     def _title_name(self, redfish_schema: dict[str, Any]) -> str | None:
         """
         Derive a type name from the ``title`` field.
 
-        Redfish titles look like ``"#Resource.Resource"`` or ``"Resource"``.
-        We strip the leading ``#``, then take the last dot-separated segment.
+        Redfish titles look like ``"#Resource.Resource"``, ``"#ProcessorCollection.ProcessorCollection"``,
+        or ``"#Redundancy.v1_7_0"`` (versioned).  We strip the leading ``#``,
+        split on ``.``, skip any trailing version segment, then return the last segment.
         """
         title = redfish_schema.get("title", "").lstrip("#")
         if not title:
             return None
-        return title.split(".")[-1] or None
+        parts = title.split(".")
+        # Drop a trailing version segment (e.g. "v1_7_0") to get the base type name.
+        if len(parts) >= 2 and self._VER_SEGMENT.match(parts[-1]):
+            parts = parts[:-1]
+        return parts[-1] or None
 
     def _normalize_schema(self, schema: dict[str, Any]) -> dict[str, Any]:
         """Normalize a definition schema."""

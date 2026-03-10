@@ -43,6 +43,14 @@ class Converter:
         "null":    "string",   # TOSCA has no null; fall back to string
     }
 
+    #: TOSCA 2.0 built-in primitive and collection types — never node types.
+    _TOSCA_PRIMITIVES: frozenset[str] = frozenset({
+        "string", "integer", "float", "boolean", "bytes", "timestamp",
+        "list", "map",
+        "scalar-unit.size", "scalar-unit.time",
+        "scalar-unit.frequency", "scalar-unit.bitrate",
+    })
+
     def __init__(self) -> None:
         self._base_path: Path | None = None
         self._search_paths: list[Path] = []     # additional schema search dirs
@@ -52,6 +60,7 @@ class Converter:
         self._id_to_path: dict[str, Path] = {}  # $id URI → local Path
         self._current_filename: str = ""        # filename of the schema being converted
         self._file_cache: dict[str, str] = {}   # absolute path → file text (per conversion)
+        self._node_type_names: set[str] = set() # names that are node types in this file
 
     def _all_dirs(self) -> list[Path]:
         """All directories to search for schema files, base path first."""
@@ -172,6 +181,49 @@ class Converter:
         """Derive the expected TOSCA output filename for a JSON Schema file."""
         return Path(file_part).stem + ".yaml"
 
+    def _load_cached_doc(self, fname: str) -> dict[str, Any] | None:
+        """Find *fname* in the schema search dirs, read it (using ``_file_cache``), and parse JSON.
+
+        Returns the parsed document dict, or ``None`` if the file cannot be
+        found, read, or parsed.  The raw text is always stored in
+        ``_file_cache`` so that text-search callers (e.g.
+        :meth:`_refs_back_to_current`) can reuse the cached content.
+        """
+        candidate = next(
+            (d / fname for d in self._all_dirs() if (d / fname).exists()), None
+        )
+        if candidate is None:
+            return None
+        key = str(candidate)
+        if key not in self._file_cache:
+            try:
+                self._file_cache[key] = candidate.read_text(encoding="utf-8")
+            except OSError:
+                self._file_cache[key] = ""
+        if not self._file_cache[key]:
+            return None
+        try:
+            return json.loads(self._file_cache[key])
+        except json.JSONDecodeError:
+            return None
+
+    def _mark_no_import(self, fname: str) -> None:
+        """Add *fname* to ``_no_import_files`` and register its root type in ``_node_type_names``.
+
+        When a file is inlined to avoid a circular TOSCA import, any type that
+        the file designates as its root resource (via a top-level
+        ``$ref: "#/definitions/TypeName"``) is also added to
+        ``_node_type_names`` so that references to that type are recognised as
+        node-type references and converted to TOSCA requirements.
+        """
+        self._no_import_files.add(fname)
+        doc = self._load_cached_doc(fname)
+        if doc is None:
+            return
+        top_ref = doc.get("$ref", "")
+        if top_ref.startswith("#/definitions/"):
+            self._node_type_names.add(self.sanitize_name(top_ref.split("/")[-1]))
+
     def _collect_no_import_files(self, root_schema: dict[str, Any]) -> None:
         """
         Pre-scan all ``$ref`` values in *root_schema* and add any external
@@ -224,11 +276,11 @@ class Converter:
             if _VER.match(stem):
                 # Versioned file: direct check
                 if self._refs_back_to_current(ref):
-                    self._no_import_files.add(fname)
+                    self._mark_no_import(fname)
             else:
                 # Unversioned file: transitive check through its versioned refs
                 if self._refs_back_to_current_transitive(ref):
-                    self._no_import_files.add(fname)
+                    self._mark_no_import(fname)
 
     def _refs_back_to_current(self, ref: str) -> bool:
         """
@@ -278,22 +330,8 @@ class Converter:
         if not file_no_frag:
             return False
         fname = Path(file_no_frag).name
-        candidate = next(
-            (d / fname for d in self._all_dirs() if (d / fname).exists()), None
-        )
-        if candidate is None:
-            return False
-        key = str(candidate)
-        if key not in self._file_cache:
-            try:
-                self._file_cache[key] = candidate.read_text(encoding="utf-8")
-            except OSError:
-                self._file_cache[key] = ""
-        if not self._file_cache[key]:
-            return False
-        try:
-            doc = json.loads(self._file_cache[key])
-        except json.JSONDecodeError:
+        doc = self._load_cached_doc(fname)
+        if doc is None:
             return False
 
         _VER = self._VER_RE
@@ -386,10 +424,10 @@ class Converter:
         stem = Path(fname).stem
         if self._VER_RE.match(stem):
             if self._refs_back_to_current(ref):
-                self._no_import_files.add(fname)
+                self._mark_no_import(fname)
                 return type_name
         elif self._refs_back_to_current_transitive(ref):
-            self._no_import_files.add(fname)
+            self._mark_no_import(fname)
             return type_name
         namespace = self._namespace_for(file_part)
         self._imports[namespace] = self._tosca_file_for(file_part)
@@ -522,13 +560,13 @@ class Converter:
         if self._VER_RE.match(stem):
             if self._refs_back_to_current(ref):
                 if fname:
-                    self._no_import_files.add(fname)
+                    self._mark_no_import(fname)
                 return "circular"
             return "versioned"
         else:
             if self._refs_back_to_current_transitive(ref):
                 if fname:
-                    self._no_import_files.add(fname)
+                    self._mark_no_import(fname)
                 return "circular"
             return "unversioned"
 
@@ -727,6 +765,113 @@ class Converter:
         defs.update(root_schema.get("$defs", {}))
         return defs
 
+    # ── Node-type detection ───────────────────────────────────────────────────
+
+    def _is_file_root_type(self, fname: str, type_name: str) -> bool:
+        """Return True if *type_name* is the root definition of external file *fname*.
+
+        Two checks are applied (either is sufficient):
+
+        1. The file's top-level ``$ref`` is ``"#/definitions/TypeName"`` — the
+           explicit Redfish convention for designating the file's resource type.
+        2. The type name matches the file's base stem (version suffix stripped)
+           **and** the file is a Redfish schema (``$id`` contains
+           ``redfish.dmtf.org``).  This covers Redfish utility schemas like
+           ``Resource.json`` that omit the top-level ``$ref``.
+        """
+        doc = self._load_cached_doc(fname)
+        if doc is None:
+            return False
+
+        # Definitive: explicit top-level $ref points to this definition.
+        if doc.get("$ref") == f"#/definitions/{type_name}":
+            return True
+
+        # Heuristic for Redfish schemas only: type name equals the base file stem.
+        if "redfish.dmtf.org" in doc.get("$id", ""):
+            stem = Path(fname).stem
+            base_stem = re.sub(r"[._]v\d+(?:[._]\d+)*$", "", stem) or stem
+            if self.sanitize_name(type_name) == self.sanitize_name(base_stem):
+                return True
+
+        return False
+
+    def _is_node_type_tosca(self, tosca_type: str) -> bool:
+        """Return True if *tosca_type* refers to a TOSCA node type rather than a data type.
+
+        - TOSCA primitives are never node types.
+        - Local (unqualified) types are checked against ``_node_type_names``.
+        - Namespaced types (``namespace:TypeName``) are checked against the
+          root definition of the corresponding external JSON Schema file.
+        """
+        if tosca_type in self._TOSCA_PRIMITIVES:
+            return False
+        if ":" in tosca_type:
+            namespace, type_name = tosca_type.split(":", 1)
+            tosca_file = self._imports.get(namespace)
+            if tosca_file is None:
+                return False
+            fname = Path(tosca_file).stem + ".json"
+            return self._is_file_root_type(fname, type_name)
+        return tosca_type in self._node_type_names
+
+    def _prop_to_requirement(
+        self, prop_def: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        """Return a TOSCA requirement dict if *prop_def* references a node type, else None.
+
+        Count range is derived from the property's ``required`` flag and whether
+        it represents a collection (``type: list``) or a single reference:
+
+        - list + required=False → ``[0, UNBOUNDED]``
+        - list + required=True  → ``[1, UNBOUNDED]``
+        - single + required=False → ``[0, 1]``
+        - single + required=True  → ``[1, 1]``
+        """
+        prop_type = prop_def.get("type", "")
+        is_required = prop_def.get("required", False)
+
+        if prop_type == "list":
+            entry_type = (prop_def.get("entry_schema") or {}).get("type", "")
+            if not entry_type or not self._is_node_type_tosca(entry_type):
+                return None
+            node_type = entry_type
+            count_range: list[Any] = [1, "UNBOUNDED"] if is_required else [0, "UNBOUNDED"]
+        elif self._is_node_type_tosca(prop_type):
+            node_type = prop_type
+            count_range = [1, 1] if is_required else [0, 1]
+        else:
+            return None
+
+        req: dict[str, Any] = {
+            "node": node_type,
+            "relationship": "tosca.relationships.DependsOn",
+            "count_range": count_range,
+        }
+        description = prop_def.get("description")
+        if description:
+            req["description"] = description
+        return req
+
+    def _split_props_and_requirements(
+        self, properties: dict[str, Any]
+    ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+        """Split *properties* into plain TOSCA properties and node-type requirements.
+
+        Returns ``(plain_props, requirements)`` where ``requirements`` is a list
+        of single-key dicts ``{name: req_def}`` suitable for TOSCA
+        ``requirements`` sections.
+        """
+        plain_props: dict[str, Any] = {}
+        requirements: list[dict[str, Any]] = []
+        for pname, pdef in properties.items():
+            req = self._prop_to_requirement(pdef)
+            if req is not None:
+                requirements.append({pname: req})
+            else:
+                plain_props[pname] = pdef
+        return plain_props, requirements
+
     # ── Core conversion ───────────────────────────────────────────────────────
 
     def _build_simple_prop_def(
@@ -893,12 +1038,21 @@ class Converter:
         required_list: list[str] = schema.get("required", [])
 
         if properties_schema:
-            tosca_type["properties"] = {
+            all_props = {
                 self.sanitize_name(pname): self.schema_to_property(
                     pname, pschema, required_list, root_schema, data_types
                 )
                 for pname, pschema in properties_schema.items()
             }
+            if is_node_type:
+                # Properties referencing node types become TOSCA requirements.
+                plain_props, requirements = self._split_props_and_requirements(all_props)
+                if plain_props:
+                    tosca_type["properties"] = plain_props
+                if requirements:
+                    tosca_type["requirements"] = requirements
+            else:
+                tosca_type["properties"] = all_props
 
         # Non-object named types (e.g. a string with enum constraints) — data types only
         if not is_node_type:
@@ -979,6 +1133,7 @@ class Converter:
             source_path.name if source_path
             else Path(root_schema.get("$id", "")).name
         )
+        self._node_type_names = set(node_type_names)
         self._collect_no_import_files(root_schema)
         data_types: dict[str, Any] = {}
         node_types: dict[str, Any] = {}
@@ -1002,6 +1157,21 @@ class Converter:
         # Convert the top-level schema if it is an object
         if root_schema.get("type") == "object" or root_schema.get("properties"):
             _add(self.sanitize_name(top_level_name), root_schema, root_schema)
+
+        # Post-processing: data types that have properties referencing node types
+        # cannot be valid TOSCA data types.  Promote them to node types so the
+        # node-type property references can be expressed as TOSCA requirements.
+        for name in list(data_types):
+            props = data_types[name].get("properties") or {}
+            plain_props, requirements = self._split_props_and_requirements(props)
+            if not requirements:
+                continue
+            dtype = data_types.pop(name)
+            node_type: dict[str, Any] = {k: v for k, v in dtype.items() if k != "properties"}
+            if plain_props:
+                node_type["properties"] = plain_props
+            node_type["requirements"] = requirements
+            node_types[name] = node_type
 
         return ConversionResult(data_types=data_types, node_types=node_types, imports=dict(self._imports))
 
