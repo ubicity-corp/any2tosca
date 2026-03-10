@@ -59,8 +59,12 @@ class Converter:
         self._registry: Registry | None = None  # referencing Registry
         self._id_to_path: dict[str, Path] = {}  # $id URI → local Path
         self._current_filename: str = ""        # filename of the schema being converted
-        self._file_cache: dict[str, str] = {}   # absolute path → file text (per conversion)
-        self._doc_cache: dict[str, dict[str, Any]] = {}  # absolute path → parsed JSON doc
+        # Persistent caches (survive across convert_schema calls for the same search dirs)
+        self._file_cache: dict[str, str] = {}          # abs path → raw text
+        self._doc_cache: dict[str, dict[str, Any]] = {}# abs path → parsed JSON
+        self._fname_to_path: dict[str, Path | None] = {}  # filename → abs Path (or None)
+        # Per-conversion cache (reset each convert_schema call)
+        self._transitive_back_cache: dict[str, bool] = {}  # start_fname → bool
         self._node_type_names: set[str] = set() # names that are node types in this file
 
     def _all_dirs(self) -> list[Path]:
@@ -70,6 +74,16 @@ class Converter:
             dirs.append(self._base_path)
         dirs.extend(self._search_paths)
         return dirs
+
+    def _resolve_fname(self, fname: str) -> "Path | None":
+        """Resolve *fname* to an absolute Path, caching the result."""
+        if fname in self._fname_to_path:
+            return self._fname_to_path[fname]
+        candidate = next(
+            (d / fname for d in self._all_dirs() if (d / fname).exists()), None
+        )
+        self._fname_to_path[fname] = candidate
+        return candidate
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -190,9 +204,7 @@ class Converter:
         ``_file_cache`` so that text-search callers (e.g.
         :meth:`_refs_back_to_current`) can reuse the cached content.
         """
-        candidate = next(
-            (d / fname for d in self._all_dirs() if (d / fname).exists()), None
-        )
+        candidate = self._resolve_fname(fname)
         if candidate is None:
             return None
         key = str(candidate)
@@ -304,9 +316,7 @@ class Converter:
         if not file_no_frag:
             return False
         fname = Path(file_no_frag).name
-        candidate = next(
-            (d / fname for d in self._all_dirs() if (d / fname).exists()), None
-        )
+        candidate = self._resolve_fname(fname)
         if candidate is None:
             return False
         key = str(candidate)
@@ -359,17 +369,19 @@ class Converter:
         if not start_fname:
             return False
 
+        if start_fname in self._transitive_back_cache:
+            return self._transitive_back_cache[start_fname]
+
         visited: set[str] = set()
         queue: list[str] = [start_fname]
+        result = False
         while queue:
             fname = queue.pop(0)
             if fname in visited:
                 continue
             visited.add(fname)
             # Ensure raw text is cached for the fast text-search below.
-            candidate = next(
-                (d / fname for d in self._all_dirs() if (d / fname).exists()), None
-            )
+            candidate = self._resolve_fname(fname)
             if candidate is None:
                 continue
             key = str(candidate)
@@ -382,14 +394,16 @@ class Converter:
             if not text:
                 continue
             if self._current_filename in text:
-                return True
+                result = True
+                break
             doc = self._load_cached_doc(fname)
             if doc is None:
                 continue
             for nested_fname in self._collect_ref_fnames(doc):
                 if nested_fname not in visited:
                     queue.append(nested_fname)
-        return False
+        self._transitive_back_cache[start_fname] = result
+        return result
 
     def _rewrite_local_refs(self, obj: Any, file_part: str) -> Any:
         """
@@ -1156,14 +1170,19 @@ class Converter:
         ConversionResult
             Named tuple with ``data_types``, ``node_types``, and ``imports`` dicts.
         """
+        new_search_paths = list(search_paths) if search_paths else []
+        if base_path != self._base_path or new_search_paths != self._search_paths:
+            # Search dirs changed: invalidate all path-dependent caches.
+            self._registry = None
+            self._id_to_path = {}
+            self._file_cache = {}
+            self._doc_cache = {}
+            self._fname_to_path = {}
         self._base_path = base_path
-        self._search_paths = list(search_paths) if search_paths else []
-        self._registry = None   # rebuild for new base_path / search_paths
-        self._id_to_path = {}
+        self._search_paths = new_search_paths
         self._imports = {}
         self._no_import_files = set()
-        self._file_cache = {}
-        self._doc_cache = {}
+        self._transitive_back_cache = {}
         self._current_filename = (
             source_path.name if source_path
             else Path(root_schema.get("$id", "")).name
