@@ -64,7 +64,7 @@ class Converter:
         self._doc_cache: dict[str, dict[str, Any]] = {}# abs path → parsed JSON
         self._fname_to_path: dict[str, Path | None] = {}  # filename → abs Path (or None)
         self._ref_fnames_cache: dict[str, frozenset[str]] = {}  # abs path → ext fnames
-        self._transitive_back_cache: dict[tuple[str, str], bool] = {}  # (start,cur) → bool
+        self._reachable_cache: dict[str, frozenset[str]] = {}   # start_fname → all reachable fnames
         # Per-conversion state (reset each convert_schema call)
         self._expanded_link_types: set[str] = set()        # types expanded from Links props
         self._node_type_names: set[str] = set() # names that are node types in this file
@@ -316,16 +316,7 @@ class Converter:
         if not file_no_frag:
             return False
         fname = Path(file_no_frag).name
-        candidate = self._resolve_fname(fname)
-        if candidate is None:
-            return False
-        key = str(candidate)
-        if key not in self._file_cache:
-            try:
-                self._file_cache[key] = candidate.read_text(encoding="utf-8")
-            except OSError:
-                self._file_cache[key] = ""
-        return bool(self._file_cache[key]) and self._current_filename in self._file_cache[key]
+        return self._current_filename in self._ref_fnames_for(fname)
 
     def _collect_ref_fnames(self, obj: Any) -> set[str]:
         """Collect all external JSON Schema filenames referenced in *obj*."""
@@ -348,13 +339,52 @@ class Converter:
         _walk(obj)
         return fnames
 
+    def _ref_fnames_for(self, fname: str) -> frozenset[str]:
+        """Return the cached set of external filenames directly referenced by *fname*."""
+        candidate = self._resolve_fname(fname)
+        if candidate is None:
+            return frozenset()
+        key = str(candidate)
+        if key not in self._ref_fnames_cache:
+            doc = self._load_cached_doc(fname)
+            self._ref_fnames_cache[key] = (
+                frozenset(self._collect_ref_fnames(doc)) if doc is not None
+                else frozenset()
+            )
+        return self._ref_fnames_cache[key]
+
+    def _get_reachable_fnames(self, start_fname: str) -> frozenset[str]:
+        """Return all filenames transitively reachable from *start_fname* via ``$ref``.
+
+        The result is cached permanently per starting filename so the BFS is
+        only ever run once per unique starting file across all conversions.
+        """
+        if start_fname in self._reachable_cache:
+            return self._reachable_cache[start_fname]
+        visited: set[str] = set()
+        queue: list[str] = [start_fname]
+        while queue:
+            fname = queue.pop(0)
+            if fname in visited:
+                continue
+            visited.add(fname)
+            for nested in self._ref_fnames_for(fname):
+                if nested not in visited:
+                    queue.append(nested)
+        result = frozenset(visited)
+        self._reachable_cache[start_fname] = result
+        return result
+
     def _refs_back_to_current_transitive(self, ref: str) -> bool:
         """
         Return ``True`` if the current file is transitively reachable from
         *ref* via any chain of external ``$ref`` pointers.
 
-        Uses breadth-first search through all reachable files, stopping as
-        soon as any file is found whose raw text mentions the current filename.
+        Uses a pre-computed persistent reachable-set so the BFS is performed
+        at most once per starting file across all conversions.  The check
+        itself is then a frozenset membership test on the directly-referenced
+        filenames of each reachable file.
+
         This handles arbitrarily deep chains such as::
 
             CurrentFile.json → A.json → A.vX_Y_Z.json → B.json
@@ -368,48 +398,10 @@ class Converter:
         start_fname = Path(file_no_frag).name
         if not start_fname:
             return False
-
-        cache_key = (start_fname, self._current_filename)
-        if cache_key in self._transitive_back_cache:
-            return self._transitive_back_cache[cache_key]
-
-        visited: set[str] = set()
-        queue: list[str] = [start_fname]
-        result = False
-        while queue:
-            fname = queue.pop(0)
-            if fname in visited:
-                continue
-            visited.add(fname)
-            # Ensure raw text is cached for the fast text-search below.
-            candidate = self._resolve_fname(fname)
-            if candidate is None:
-                continue
-            key = str(candidate)
-            if key not in self._file_cache:
-                try:
-                    self._file_cache[key] = candidate.read_text(encoding="utf-8")
-                except OSError:
-                    self._file_cache[key] = ""
-            text = self._file_cache[key]
-            if not text:
-                continue
-            if self._current_filename in text:
-                result = True
-                break
-            # Use cached set of external filenames (avoids re-walking the JSON
-            # tree on every BFS call — the biggest CPU cost before this cache).
-            if key not in self._ref_fnames_cache:
-                doc = self._load_cached_doc(fname)
-                self._ref_fnames_cache[key] = (
-                    frozenset(self._collect_ref_fnames(doc)) if doc is not None
-                    else frozenset()
-                )
-            for nested_fname in self._ref_fnames_cache[key]:
-                if nested_fname not in visited:
-                    queue.append(nested_fname)
-        self._transitive_back_cache[cache_key] = result
-        return result
+        for fname in self._get_reachable_fnames(start_fname):
+            if self._current_filename in self._ref_fnames_for(fname):
+                return True
+        return False
 
     def _rewrite_local_refs(self, obj: Any, file_part: str) -> Any:
         """
@@ -1245,7 +1237,7 @@ class Converter:
             self._doc_cache = {}
             self._fname_to_path = {}
             self._ref_fnames_cache = {}
-            self._transitive_back_cache = {}
+            self._reachable_cache = {}
         self._base_path = base_path
         self._search_paths = new_search_paths
         self._imports = {}
