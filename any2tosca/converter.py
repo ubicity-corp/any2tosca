@@ -51,6 +51,7 @@ class Converter:
         self._registry: Registry | None = None  # referencing Registry
         self._id_to_path: dict[str, Path] = {}  # $id URI → local Path
         self._current_filename: str = ""        # filename of the schema being converted
+        self._file_cache: dict[str, str] = {}   # absolute path → file text (per conversion)
 
     def _all_dirs(self) -> list[Path]:
         """All directories to search for schema files, base path first."""
@@ -105,16 +106,16 @@ class Converter:
 
         if "://" in ref:
             uri_no_frag, _, fragment = ref.partition("#")
-            _, id_to_path = self._get_registry()
-            file_path = id_to_path.get(uri_no_frag)
+            # Fast path: match by filename extracted from the URI (works for most schemas).
+            fname = Path(uri_no_frag).name
+            file_path: Path | None = next(
+                (d / fname for d in self._all_dirs() if (d / fname).exists()), None
+            )
+            # Slow path: consult the $id registry for schemas whose URI doesn't
+            # end with the same filename as the local file.
             if file_path is None:
-                # Fallback: match by filename when $id doesn't match the URI
-                fname = Path(uri_no_frag).name
-                for search_dir in self._all_dirs():
-                    candidate = search_dir / fname
-                    if candidate.exists():
-                        file_path = candidate
-                        break
+                _, id_to_path = self._get_registry()
+                file_path = id_to_path.get(uri_no_frag)
             if file_path is None:
                 return None, ""
             type_name = self.sanitize_name(fragment.split("/")[-1]) if fragment else self.sanitize_name(file_path.stem)
@@ -202,6 +203,10 @@ class Converter:
 
         _collect(root_schema)
 
+        # Deduplicate to one representative ref per filename so each external
+        # file is read at most once regardless of how many fragment-refs point
+        # to it (e.g. Resource.json#/Description, Resource.json#/Name, …).
+        seen_files: dict[str, str] = {}  # fname → first ref seen for that file
         for ref in seen:
             if ref.startswith("#"):
                 continue
@@ -209,9 +214,13 @@ class Converter:
             if not uri:
                 continue
             fname = Path(uri).name
-            if not fname or fname in self._no_import_files:
+            if fname and fname not in seen_files:
+                seen_files[fname] = ref
+
+        for fname, ref in seen_files.items():
+            if fname in self._no_import_files:
                 continue
-            stem = Path(uri.split("/")[-1]).stem
+            stem = Path(fname).stem
             if _VER.match(stem):
                 # Versioned file: direct check
                 if self._refs_back_to_current(ref):
@@ -243,11 +252,13 @@ class Converter:
         )
         if candidate is None:
             return False
-        try:
-            content = candidate.read_text(encoding="utf-8")
-            return self._current_filename in content
-        except OSError:
-            return False
+        key = str(candidate)
+        if key not in self._file_cache:
+            try:
+                self._file_cache[key] = candidate.read_text(encoding="utf-8")
+            except OSError:
+                self._file_cache[key] = ""
+        return bool(self._file_cache[key]) and self._current_filename in self._file_cache[key]
 
     def _refs_back_to_current_transitive(self, ref: str) -> bool:
         """
@@ -272,9 +283,17 @@ class Converter:
         )
         if candidate is None:
             return False
+        key = str(candidate)
+        if key not in self._file_cache:
+            try:
+                self._file_cache[key] = candidate.read_text(encoding="utf-8")
+            except OSError:
+                self._file_cache[key] = ""
+        if not self._file_cache[key]:
+            return False
         try:
-            doc = json.loads(candidate.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            doc = json.loads(self._file_cache[key])
+        except json.JSONDecodeError:
             return False
 
         _VER = self._VER_RE
@@ -358,7 +377,19 @@ class Converter:
             return type_name
         # File was merged inline to avoid a circular import — treat all its types
         # as locally defined (they appear in the inline-merged properties).
-        if Path(file_part).name in self._no_import_files:
+        fname = Path(file_part).name
+        if fname in self._no_import_files:
+            return type_name
+        # On-demand circular-import check: catches refs inside files that were
+        # already inlined (and therefore not present in the root schema's refs,
+        # so missed by the initial _collect_no_import_files pre-scan).
+        stem = Path(fname).stem
+        if self._VER_RE.match(stem):
+            if self._refs_back_to_current(ref):
+                self._no_import_files.add(fname)
+                return type_name
+        elif self._refs_back_to_current_transitive(ref):
+            self._no_import_files.add(fname)
             return type_name
         namespace = self._namespace_for(file_part)
         self._imports[namespace] = self._tosca_file_for(file_part)
@@ -369,9 +400,9 @@ class Converter:
         Resolve a ``$ref`` to its schema dict.
 
         Local ``#/...`` refs are resolved directly against ``root_schema``.
-        External refs (relative or absolute URI) are resolved via the
-        ``referencing`` registry, using the root schema's ``$id`` as the
-        base URI so that relative refs resolve correctly.
+        External refs are resolved by filename first (fast path); the
+        ``referencing`` registry is only consulted as a fallback for schemas
+        whose URI does not end with the local filename.
         """
         if ref.startswith("#/"):
             parts = ref.lstrip("#/").split("/")
@@ -386,16 +417,7 @@ class Converter:
         if self._base_path is None:
             return {}
 
-        registry, _ = self._get_registry()
-        base_uri = root_schema.get("$id", "")
-        try:
-            resolver = registry.resolver(base_uri=base_uri) if base_uri else registry.resolver()
-            contents = resolver.lookup(ref).contents
-            return contents if isinstance(contents, dict) else {}
-        except Exception:
-            pass
-
-        # Registry lookup failed — fall back to loading the file directly by name
+        # Fast path: load file directly by filename extracted from the ref.
         file_no_frag, _, fragment = ref.partition("#")
         if file_no_frag:
             fname = Path(file_no_frag).name
@@ -418,6 +440,16 @@ class Converter:
                     return doc if isinstance(doc, dict) else {}
                 except (OSError, json.JSONDecodeError):
                     pass
+
+        # Slow path: consult the referencing.Registry for complex URI resolution.
+        registry, _ = self._get_registry()
+        base_uri = root_schema.get("$id", "")
+        try:
+            resolver = registry.resolver(base_uri=base_uri) if base_uri else registry.resolver()
+            contents = resolver.lookup(ref).contents
+            return contents if isinstance(contents, dict) else {}
+        except Exception:
+            pass
 
         print(f"Warning: failed to resolve $ref '{ref}' — schema details will be missing", file=sys.stderr)
         return {}
@@ -484,12 +516,21 @@ class Converter:
             return "local"
         uri = ref.partition("#")[0]
         fname = Path(uri).name
-        if fname in self._no_import_files or self._refs_back_to_current(ref):
-            if fname:
-                self._no_import_files.add(fname)
+        if fname in self._no_import_files:
             return "circular"
         stem = Path(uri.split("/")[-1]).stem
-        return "versioned" if self._VER_RE.match(stem) else "unversioned"
+        if self._VER_RE.match(stem):
+            if self._refs_back_to_current(ref):
+                if fname:
+                    self._no_import_files.add(fname)
+                return "circular"
+            return "versioned"
+        else:
+            if self._refs_back_to_current_transitive(ref):
+                if fname:
+                    self._no_import_files.add(fname)
+                return "circular"
+            return "unversioned"
 
     def _merge_props_from(
         self,
@@ -751,6 +792,7 @@ class Converter:
         if schema.get("properties"):
             safe_name = self.sanitize_name(type_name)
             if safe_name not in data_types:
+                data_types[safe_name] = {}  # sentinel: breaks recursive cycles
                 data_types[safe_name] = self.schema_to_tosca_data_type(
                     safe_name, schema, root_schema, data_types
                 )
@@ -798,9 +840,11 @@ class Converter:
         # Inline object with properties → create a named data type and reference it
         if prop_schema.get("properties") and json_type in ("object", None):
             nested_type_name = self.sanitize_name(prop_name)
-            data_types[nested_type_name] = self.schema_to_tosca_data_type(
-                nested_type_name, prop_schema, root_schema, data_types
-            )
+            if nested_type_name not in data_types:
+                data_types[nested_type_name] = {}  # sentinel: breaks recursive cycles
+                data_types[nested_type_name] = self.schema_to_tosca_data_type(
+                    nested_type_name, prop_schema, root_schema, data_types
+                )
             return self._build_simple_prop_def(nested_type_name, prop_schema, prop_name, required_props)
 
         # Primitive type — also carries validation and entry_schema
@@ -930,6 +974,7 @@ class Converter:
         self._id_to_path = {}
         self._imports = {}
         self._no_import_files = set()
+        self._file_cache = {}
         self._current_filename = (
             source_path.name if source_path
             else Path(root_schema.get("$id", "")).name
