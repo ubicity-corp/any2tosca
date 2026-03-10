@@ -60,6 +60,7 @@ class Converter:
         self._id_to_path: dict[str, Path] = {}  # $id URI → local Path
         self._current_filename: str = ""        # filename of the schema being converted
         self._file_cache: dict[str, str] = {}   # absolute path → file text (per conversion)
+        self._doc_cache: dict[str, dict[str, Any]] = {}  # absolute path → parsed JSON doc
         self._node_type_names: set[str] = set() # names that are node types in this file
 
     def _all_dirs(self) -> list[Path]:
@@ -202,10 +203,14 @@ class Converter:
                 self._file_cache[key] = ""
         if not self._file_cache[key]:
             return None
+        if key in self._doc_cache:
+            return self._doc_cache[key]
         try:
-            return json.loads(self._file_cache[key])
+            doc = json.loads(self._file_cache[key])
         except json.JSONDecodeError:
             return None
+        self._doc_cache[key] = doc
+        return doc
 
     def _mark_no_import(self, fname: str) -> None:
         """Add *fname* to ``_no_import_files`` and register its root type in ``_node_type_names``.
@@ -843,9 +848,11 @@ class Converter:
         else:
             return None
 
+        self._imports["core"] = "Core.yaml"
         req: dict[str, Any] = {
             "node": node_type,
-            "relationship": "tosca.relationships.DependsOn",
+            "capability": "core:Containable",
+            "relationship": "core:Contains",
             "count_range": count_range,
         }
         description = prop_def.get("description")
@@ -1129,6 +1136,7 @@ class Converter:
         self._imports = {}
         self._no_import_files = set()
         self._file_cache = {}
+        self._doc_cache = {}
         self._current_filename = (
             source_path.name if source_path
             else Path(root_schema.get("$id", "")).name
@@ -1172,6 +1180,13 @@ class Converter:
                 node_type["properties"] = plain_props
             node_type["requirements"] = requirements
             node_types[name] = node_type
+
+        # Every node type can be the target of a core:Contains requirement,
+        # so add the core:Containable capability to all of them.
+        if node_types:
+            self._imports["core"] = "Core.yaml"
+            for nt in node_types.values():
+                nt.setdefault("capabilities", {})["containable"] = {"type": "core:Containable"}
 
         return ConversionResult(data_types=data_types, node_types=node_types, imports=dict(self._imports))
 
