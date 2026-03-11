@@ -1165,6 +1165,12 @@ class Converter:
             else:
                 tosca_type["properties"] = all_props
 
+        # All node types expose a core:Feature capability so they can be targeted
+        # by core:DependsOn requirements (e.g. from the Redfish Links pattern).
+        if is_node_type:
+            self._imports["core"] = "Core.yaml"
+            tosca_type["capabilities"] = {"feature": {"type": "core:Feature"}}
+
         # Non-object named types (e.g. a string with enum constraints) — data types only
         if not is_node_type:
             json_type = schema.get("type")

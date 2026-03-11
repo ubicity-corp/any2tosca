@@ -262,3 +262,6 @@ def test_links_property_expanded_to_requirements():
     # Links type must not remain in output
     assert "Links" not in result.data_types
     assert "Links" not in result.node_types
+    # All node types must expose a core:Feature capability
+    assert widget.get("capabilities", {}).get("feature", {}).get("type") == "core:Feature"
+    assert result.node_types["Thing"].get("capabilities", {}).get("feature", {}).get("type") == "core:Feature"
