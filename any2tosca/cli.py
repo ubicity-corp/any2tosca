@@ -98,7 +98,12 @@ def _report(result: ConversionResult, verbose: bool, path: Path) -> None:
 
 def _write_file(result: ConversionResult, input_path: Path, out_dir: Path) -> Path:
     """Write a single ConversionResult to <out_dir>/<input_stem>.tosca.yaml."""
-    tosca_doc = build_tosca_document(result.data_types, result.node_types, result.imports or None)
+    tosca_doc = build_tosca_document(
+        result.data_types,
+        result.node_types,
+        result.relationship_types or None,
+        result.imports or None,
+    )
     out_path = out_dir / input_path.with_suffix(".yaml").name
     out_path.write_text(dump_tosca_yaml(tosca_doc), encoding="utf-8")
     return out_path

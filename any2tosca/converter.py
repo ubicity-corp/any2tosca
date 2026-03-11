@@ -24,7 +24,8 @@ class ConversionResult(NamedTuple):
     """Holds the output of a schema conversion."""
     data_types: dict[str, Any]
     node_types: dict[str, Any]
-    imports: dict[str, str] = {}  # namespace → tosca_file
+    imports: dict[str, str] = {}           # namespace → tosca_file
+    relationship_types: dict[str, Any] = {}  # name → TOSCA relationship type dict
 
 
 class Converter:
@@ -68,7 +69,8 @@ class Converter:
         # Per-conversion cache (reset each convert_schema call)
         self._transitive_back_cache: dict[str, bool] = {}  # start_fname → bool (for current _current_filename)
         # Per-conversion state (reset each convert_schema call)
-        self._expanded_link_types: set[str] = set()        # types expanded from Links props
+        self._expanded_link_types: set[str] = set()          # types expanded from Links props
+        self._relationship_types: dict[str, Any] = {}        # name → relationship type dict
         self._node_type_names: set[str] = set() # names that are node types in this file
 
     def _all_dirs(self) -> list[Path]:
@@ -918,6 +920,7 @@ class Converter:
 
     def _expand_links_prop(
         self,
+        node_type_name: str,
         links_ref: str,
         root_schema: dict[str, Any],
         data_types: dict[str, Any],
@@ -927,8 +930,12 @@ class Converter:
         Resolves the Links definition identified by *links_ref*, processes each
         of its properties, and returns a list of TOSCA requirement dicts for
         those that reference node types.  The requirements use
-        ``core:DependsOn`` / ``core:Feature`` to express "related but not
-        contained" relationships, as intended by the Redfish Links pattern.
+        ``core:DependsOn`` / ``core:Feature`` (or a derived relationship type
+        if the Links definition also contains non-reference properties).
+
+        Non-node-type properties from the Links definition are collected into a
+        ``{NodeTypeName}DependsOn`` relationship type that derives from
+        ``core:DependsOn`` and is stored in ``_relationship_types``.
 
         Also records the type name in ``_expanded_link_types`` so the now-
         unused Links data/node type can be removed after conversion.
@@ -938,7 +945,11 @@ class Converter:
             self._expanded_link_types.add(type_name)
 
         resolved = self._resolve_for_merge(links_ref, root_schema)
-        requirements: list[dict[str, Any]] = []
+
+        # Separate node-type refs (→ requirements) from plain properties.
+        pending: list[tuple[str, str, list[Any], str | None]] = []  # (safe_name, node_type, count_range, description)
+        extra_props: dict[str, Any] = {}
+
         for pname, pschema in resolved.get("properties", {}).items():
             safe_name = self.sanitize_name(pname)
             prop_def = self.schema_to_property(pname, pschema, [], root_schema, data_types)
@@ -946,22 +957,36 @@ class Converter:
             if prop_type == "list":
                 entry_type = (prop_def.get("entry_schema") or {}).get("type", "")
                 if not self._is_node_type_tosca(entry_type):
+                    extra_props[safe_name] = prop_def
                     continue
-                node_type = entry_type
-                count_range: list[Any] = [0, "UNBOUNDED"]
+                pending.append((safe_name, entry_type, [0, "UNBOUNDED"], prop_def.get("description")))
             elif self._is_node_type_tosca(prop_type):
-                node_type = prop_type
-                count_range = [0, 1]
+                pending.append((safe_name, prop_type, [0, 1], prop_def.get("description")))
             else:
-                continue
-            self._imports["core"] = "Core.yaml"
+                extra_props[safe_name] = prop_def
+
+        self._imports["core"] = "Core.yaml"
+
+        # If there are extra (non-ref) properties, create a dedicated relationship
+        # type that derives from core:DependsOn and carries those properties.
+        if extra_props and pending:
+            rel_type_name = f"{node_type_name}DependsOn"
+            self._relationship_types[rel_type_name] = {
+                "derived_from": "core:DependsOn",
+                "properties": extra_props,
+            }
+            relationship = rel_type_name
+        else:
+            relationship = "core:DependsOn"
+
+        requirements: list[dict[str, Any]] = []
+        for safe_name, node_type, count_range, description in pending:
             req: dict[str, Any] = {
                 "node": node_type,
                 "capability": "core:Feature",
-                "relationship": "core:DependsOn",
+                "relationship": relationship,
                 "count_range": count_range,
             }
-            description = prop_def.get("description")
             if description:
                 req["description"] = description
             requirements.append({safe_name: req})
@@ -1143,7 +1168,7 @@ class Converter:
                         and isinstance(pschema, dict) and "$ref" in pschema
                         and self._parse_ref(pschema["$ref"])[1] == "Links"):
                     links_requirements.extend(
-                        self._expand_links_prop(pschema["$ref"], root_schema, data_types)
+                        self._expand_links_prop(type_name, pschema["$ref"], root_schema, data_types)
                     )
                 else:
                     regular_props[pname] = pschema
@@ -1254,6 +1279,7 @@ class Converter:
         self._imports = {}
         self._no_import_files = set()
         self._expanded_link_types = set()
+        self._relationship_types = {}
         self._transitive_back_cache = {}
         self._current_filename = (
             source_path.name if source_path
@@ -1345,12 +1371,18 @@ class Converter:
             for nt in node_types.values():
                 nt.setdefault("capabilities", {})["containable"] = {"type": "core:Containable"}
 
-        return ConversionResult(data_types=data_types, node_types=node_types, imports=dict(self._imports))
+        return ConversionResult(
+            data_types=data_types,
+            node_types=node_types,
+            imports=dict(self._imports),
+            relationship_types=dict(self._relationship_types),
+        )
 
     def build_tosca_document(
         self,
         data_types: dict[str, Any],
         node_types: dict[str, Any] | None = None,
+        relationship_types: dict[str, Any] | None = None,
         imports: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Wrap type dicts in a full TOSCA service-template skeleton."""
@@ -1362,6 +1394,8 @@ class Converter:
             doc["imports"] = [{"url": file, "namespace": ns} for ns, file in imports.items()]
         if data_types:
             doc["data_types"] = data_types
+        if relationship_types:
+            doc["relationship_types"] = relationship_types
         if node_types:
             doc["node_types"] = node_types
         return doc
@@ -1384,6 +1418,7 @@ def convert_schema(
 def build_tosca_document(
     data_types: dict[str, Any],
     node_types: dict[str, Any] | None = None,
+    relationship_types: dict[str, Any] | None = None,
     imports: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    return Converter().build_tosca_document(data_types, node_types, imports)
+    return Converter().build_tosca_document(data_types, node_types, relationship_types, imports)

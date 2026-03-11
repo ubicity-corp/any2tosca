@@ -254,10 +254,10 @@ def test_links_property_expanded_to_requirements():
     widget = result.node_types["Widget"]
     # Links property must not appear
     assert "Links" not in widget.get("properties", {})
-    # RelatedThing must appear as a DependsOn requirement
+    # RelatedThing must appear as a DependsOn requirement using the custom relationship type
     reqs = {k: v for req in widget.get("requirements", []) for k, v in req.items()}
     assert "RelatedThing" in reqs
-    assert reqs["RelatedThing"]["relationship"] == "core:DependsOn"
+    assert reqs["RelatedThing"]["relationship"] == "WidgetDependsOn"
     assert reqs["RelatedThing"]["capability"] == "core:Feature"
     # Links type must not remain in output
     assert "Links" not in result.data_types
@@ -265,3 +265,8 @@ def test_links_property_expanded_to_requirements():
     # All node types must expose a core:Feature capability
     assert widget.get("capabilities", {}).get("feature", {}).get("type") == "core:Feature"
     assert result.node_types["Thing"].get("capabilities", {}).get("feature", {}).get("type") == "core:Feature"
+    # A WidgetDependsOn relationship type must be defined with the Oem property
+    assert "WidgetDependsOn" in result.relationship_types
+    wdo = result.relationship_types["WidgetDependsOn"]
+    assert wdo["derived_from"] == "core:DependsOn"
+    assert "Oem" in wdo["properties"]
