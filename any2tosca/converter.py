@@ -65,6 +65,8 @@ class Converter:
         self._fname_to_path: dict[str, Path | None] = {}  # filename → abs Path (or None)
         self._ref_fnames_cache: dict[str, frozenset[str]] = {}  # abs path → ext fnames
         self._reachable_cache: dict[str, frozenset[str]] = {}   # start_fname → all reachable fnames
+        # Per-conversion cache (reset each convert_schema call)
+        self._transitive_back_cache: dict[str, bool] = {}  # start_fname → bool (for current _current_filename)
         # Per-conversion state (reset each convert_schema call)
         self._expanded_link_types: set[str] = set()        # types expanded from Links props
         self._node_type_names: set[str] = set() # names that are node types in this file
@@ -347,10 +349,11 @@ class Converter:
         key = str(candidate)
         if key not in self._ref_fnames_cache:
             doc = self._load_cached_doc(fname)
-            self._ref_fnames_cache[key] = (
+            refs = (
                 frozenset(self._collect_ref_fnames(doc)) if doc is not None
                 else frozenset()
             )
+            self._ref_fnames_cache[key] = refs
         return self._ref_fnames_cache[key]
 
     def _get_reachable_fnames(self, start_fname: str) -> frozenset[str]:
@@ -382,8 +385,8 @@ class Converter:
 
         Uses a pre-computed persistent reachable-set so the BFS is performed
         at most once per starting file across all conversions.  The check
-        itself is then a frozenset membership test on the directly-referenced
-        filenames of each reachable file.
+        itself is an O(1) frozenset membership test: is ``_current_filename``
+        in the reachable set of ``start_fname``?
 
         This handles arbitrarily deep chains such as::
 
@@ -398,10 +401,12 @@ class Converter:
         start_fname = Path(file_no_frag).name
         if not start_fname:
             return False
-        for fname in self._get_reachable_fnames(start_fname):
-            if self._current_filename in self._ref_fnames_for(fname):
-                return True
-        return False
+        if start_fname in self._transitive_back_cache:
+            return self._transitive_back_cache[start_fname]
+        # O(1) frozenset lookup: is _current_filename reachable from start_fname?
+        result = self._current_filename in self._get_reachable_fnames(start_fname)
+        self._transitive_back_cache[start_fname] = result
+        return result
 
     def _rewrite_local_refs(self, obj: Any, file_part: str) -> Any:
         """
@@ -1243,6 +1248,7 @@ class Converter:
         self._imports = {}
         self._no_import_files = set()
         self._expanded_link_types = set()
+        self._transitive_back_cache = {}
         self._current_filename = (
             source_path.name if source_path
             else Path(root_schema.get("$id", "")).name
