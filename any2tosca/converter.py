@@ -465,21 +465,18 @@ class Converter:
         if self._current_filename and Path(file_part).name == self._current_filename:
             return type_name
         fname = Path(file_part).name
+        if fname in self._no_import_files:
+            return type_name
         # On-demand circular-import check: catches refs inside files that were
         # already inlined (and therefore not present in the root schema's refs,
         # so missed by the initial _collect_no_import_files pre-scan).
-        if fname not in self._no_import_files:
-            stem = Path(fname).stem
-            if self._VER_RE.match(stem):
-                if self._refs_back_to_current(ref):
-                    self._mark_no_import(fname)
-            elif self._refs_back_to_current_transitive(ref):
+        stem = Path(fname).stem
+        if self._VER_RE.match(stem):
+            if self._refs_back_to_current(ref):
                 self._mark_no_import(fname)
-        # File was merged inline to avoid a circular import — treat all its types
-        # as locally defined (they appear in the inline-merged properties).
-        # Exception: file-root (node) types cannot be inlined; use a namespaced
-        # reference and accept the circular TOSCA import.
-        if fname in self._no_import_files and not self._is_file_root_type(fname, type_name):
+                return type_name
+        elif self._refs_back_to_current_transitive(ref):
+            self._mark_no_import(fname)
             return type_name
         namespace = self._namespace_for(file_part)
         self._imports[namespace] = self._tosca_file_for(file_part)
@@ -1029,8 +1026,14 @@ class Converter:
             ref = item_schema["$ref"]
             fp, type_name = self._parse_ref(ref)
             if fp is not None and Path(fp).name in self._no_import_files:
+                # For list items (containment), force a namespaced import even
+                # when the file is circular — node types cannot be inlined and
+                # a collection must know its member type.  Register the import
+                # directly to bypass _ref_to_tosca_type's no-import guard.
                 if self._is_file_root_type(Path(fp).name, type_name or ""):
-                    return self._ref_to_tosca_type(ref)
+                    namespace = self._namespace_for(fp)
+                    self._imports[namespace] = self._tosca_file_for(fp)
+                    return f"{namespace}:{type_name}"
                 resolved = self._resolve_for_merge(ref, root_schema)
                 resolved = {**resolved, **{k: v for k, v in item_schema.items() if k != "$ref"}}
                 return self._inline_type_or_primitive(type_name, resolved, root_schema, data_types)
@@ -1086,16 +1089,8 @@ class Converter:
         # $ref → use the referenced TOSCA data type name directly
         if "$ref" in prop_schema:
             ref = prop_schema["$ref"]
-            file_part, type_name_hint = self._parse_ref(ref)
+            file_part, _ = self._parse_ref(ref)
             if file_part is not None and Path(file_part).name in self._no_import_files:
-                fname = Path(file_part).name
-                # Node types (file-root types) cannot be inlined as data types;
-                # use the namespaced reference even though it creates a circular import.
-                if self._is_file_root_type(fname, type_name_hint or ""):
-                    ref_type_name = self._ref_to_tosca_type(ref)
-                    ref_schema = self.resolve_ref(ref, root_schema)
-                    merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
-                    return self._build_simple_prop_def(ref_type_name, merged, prop_name, required_props)
                 # Referenced file would create a circular import — resolve the
                 # schema inline and fall through to normal type detection.
                 # Use _resolve_for_merge (not resolve_ref) so that any local
