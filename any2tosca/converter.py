@@ -1086,8 +1086,16 @@ class Converter:
         # $ref → use the referenced TOSCA data type name directly
         if "$ref" in prop_schema:
             ref = prop_schema["$ref"]
-            file_part, _ = self._parse_ref(ref)
+            file_part, type_name_hint = self._parse_ref(ref)
             if file_part is not None and Path(file_part).name in self._no_import_files:
+                fname = Path(file_part).name
+                # Node types (file-root types) cannot be inlined as data types;
+                # use the namespaced reference even though it creates a circular import.
+                if self._is_file_root_type(fname, type_name_hint or ""):
+                    ref_type_name = self._ref_to_tosca_type(ref)
+                    ref_schema = self.resolve_ref(ref, root_schema)
+                    merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
+                    return self._build_simple_prop_def(ref_type_name, merged, prop_name, required_props)
                 # Referenced file would create a circular import — resolve the
                 # schema inline and fall through to normal type detection.
                 # Use _resolve_for_merge (not resolve_ref) so that any local
