@@ -464,21 +464,22 @@ class Converter:
         # same TOSCA output file, so no import is needed.
         if self._current_filename and Path(file_part).name == self._current_filename:
             return type_name
-        # File was merged inline to avoid a circular import — treat all its types
-        # as locally defined (they appear in the inline-merged properties).
         fname = Path(file_part).name
-        if fname in self._no_import_files:
-            return type_name
         # On-demand circular-import check: catches refs inside files that were
         # already inlined (and therefore not present in the root schema's refs,
         # so missed by the initial _collect_no_import_files pre-scan).
-        stem = Path(fname).stem
-        if self._VER_RE.match(stem):
-            if self._refs_back_to_current(ref):
+        if fname not in self._no_import_files:
+            stem = Path(fname).stem
+            if self._VER_RE.match(stem):
+                if self._refs_back_to_current(ref):
+                    self._mark_no_import(fname)
+            elif self._refs_back_to_current_transitive(ref):
                 self._mark_no_import(fname)
-                return type_name
-        elif self._refs_back_to_current_transitive(ref):
-            self._mark_no_import(fname)
+        # File was merged inline to avoid a circular import — treat all its types
+        # as locally defined (they appear in the inline-merged properties).
+        # Exception: file-root (node) types cannot be inlined; use a namespaced
+        # reference and accept the circular TOSCA import.
+        if fname in self._no_import_files and not self._is_file_root_type(fname, type_name):
             return type_name
         namespace = self._namespace_for(file_part)
         self._imports[namespace] = self._tosca_file_for(file_part)
@@ -1028,6 +1029,8 @@ class Converter:
             ref = item_schema["$ref"]
             fp, type_name = self._parse_ref(ref)
             if fp is not None and Path(fp).name in self._no_import_files:
+                if self._is_file_root_type(Path(fp).name, type_name or ""):
+                    return self._ref_to_tosca_type(ref)
                 resolved = self._resolve_for_merge(ref, root_schema)
                 resolved = {**resolved, **{k: v for k, v in item_schema.items() if k != "$ref"}}
                 return self._inline_type_or_primitive(type_name, resolved, root_schema, data_types)
