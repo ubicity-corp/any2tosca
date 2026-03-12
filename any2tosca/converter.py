@@ -473,6 +473,17 @@ class Converter:
         # so missed by the initial _collect_no_import_files pre-scan).
         stem = Path(fname).stem
         if self._VER_RE.match(stem):
+            # If the unversioned base of this versioned schema is already
+            # no-import, this versioned schema is part of the same family
+            # and should also be treated as no-import.  This prevents
+            # circular imports when an inlined circular schema's anyOf
+            # references versioned variants (e.g. inlined Control.json
+            # has anyOf → Control.v1_7_0.json, but Control.json is circular
+            # so all Control versioned schemas should be suppressed too).
+            base_fname = re.sub(r"\.v\d.*$", "", stem) + Path(fname).suffix
+            if base_fname in self._no_import_files:
+                self._mark_no_import(fname)
+                return type_name
             if self._refs_back_to_current(ref):
                 self._mark_no_import(fname)
                 return type_name
@@ -783,7 +794,17 @@ class Converter:
                             # that would cause the versioned YAML to import ours when
                             # independently converted, creating a TOSCA cycle.
                             _back_imports = self._versioned_refs_our_root_type(fname_best)
-                            if not _unsafe_bypass and not _back_imports:
+                            # Block when fname_best's unversioned base is circular AND
+                            # fname_best was not directly referenced by the current file.
+                            # This catches inlined circular schema anyOf members:
+                            # e.g. when Sensor.json (circular) is inlined and its anyOf
+                            # has Sensor.v1_12_0.json — we block the bypass since the
+                            # ref was discovered through inlining, not direct reference.
+                            _base_circular = False
+                            _base_fname = re.sub(r"\.v\d.*$", "", Path(fname_best).stem) + Path(fname_best).suffix
+                            if _base_fname != fname_best and _base_fname in self._no_import_files and not _current_refs_fname:
+                                _base_circular = True
+                            if not _unsafe_bypass and not _back_imports and not _base_circular:
                                 namespace = self._namespace_for(file_part)
                                 self._imports[namespace] = self._tosca_file_for(file_part)
                                 derived_from = f"{namespace}:{type_name_from_ref}"
@@ -910,6 +931,72 @@ class Converter:
             return False
 
         return _has_root_ref(versioned_doc)
+
+    def _would_create_back_import(self, fname: str, checking_for: str) -> bool:
+        """Return True if independently converting *fname* would eventually produce
+        a TOSCA import of *checking_for*, which would create a circular import.
+
+        This detects the pattern where:
+        1. *fname* has a versioned schema V that would be selected as ``derived_from``
+           when *fname* is independently converted (i.e. V does NOT ref *fname*'s
+           root definition type, so ``_versioned_refs_our_root_type`` would not block it).
+        2. That versioned schema V directly references *checking_for* or its
+           unversioned base — meaning when V.yaml is generated, it would import
+           checking_for.yaml (or its base's yaml, which in turn imports the versioned
+           checking_for.yaml via derived_from).
+
+        Example: Sensor.json has Sensor.v1_12_0.json, which does NOT ref
+        Sensor.json#/definitions/Sensor (so it would be selected as derived_from),
+        and Sensor.v1_12_0.json directly refs Control.json (the base of
+        Control.v1_7_0.json).  When Sensor.v1_12_0.yaml is generated it imports
+        Control.yaml, which imports Control.v1_7_0.yaml — creating the cycle
+        Control.v1_7_0.yaml → Sensor.yaml → … → Control.v1_7_0.yaml.
+        """
+        fname_doc = self._load_cached_doc(fname)
+        if fname_doc is None:
+            return False
+        # Get fname's root definition type name
+        fname_root_ref = fname_doc.get("$ref", "")
+        fname_root_type = (
+            fname_root_ref[len("#/definitions/"):]
+            if fname_root_ref.startswith("#/definitions/")
+            else ""
+        )
+        # Determine the unversioned "base" of checking_for
+        checking_stem = Path(checking_for).stem
+        if self._VER_RE.match(checking_stem):
+            base_name = re.sub(r"\.v\d.*$", "", checking_stem)
+            checking_base = base_name + Path(checking_for).suffix
+        else:
+            checking_base = checking_for
+        # Iterate over versioned schemas directly referenced by fname
+        for versioned_fname in self._ref_fnames_for(fname):
+            if not self._VER_RE.match(Path(versioned_fname).stem):
+                continue
+            # Would this versioned schema be blocked as derived_from?
+            # Blocked when it refs fname's root type (same logic as _versioned_refs_our_root_type)
+            if fname_root_type:
+                v_doc = self._load_cached_doc(versioned_fname)
+                if v_doc is not None:
+                    def _refs_fname_root(obj: Any) -> bool:
+                        if isinstance(obj, dict):
+                            ref = obj.get("$ref", "")
+                            if ref:
+                                fp, tn = self._parse_ref(ref)
+                                if fp is not None and Path(fp).name == fname and tn == fname_root_type:
+                                    return True
+                            return any(_refs_fname_root(v) for v in obj.values())
+                        if isinstance(obj, list):
+                            return any(_refs_fname_root(v) for v in obj)
+                        return False
+                    if _refs_fname_root(v_doc):
+                        continue  # would be blocked as derived_from → skip
+            # This versioned schema would be imported as derived_from.
+            # Check if it directly refs checking_for or its unversioned base.
+            v_direct_refs = self._ref_fnames_for(versioned_fname)
+            if checking_for in v_direct_refs or checking_base in v_direct_refs:
+                return True
+        return False
 
     def _is_explicit_file_root(self, fname: str) -> bool:
         """Return True only if *fname* has an explicit top-level ``$ref`` to a definition.
@@ -1124,7 +1211,12 @@ class Converter:
                 _current_refs_fname = fname in self._current_file_refs
                 _current_is_explicit_root = self._is_explicit_file_root(self._current_filename)
                 _unsafe_bypass = _current_refs_fname and not _current_is_explicit_root
-                if self._is_file_root_type(fname, type_name or "") and not _unsafe_bypass and _current_refs_fname:
+                _back_import = (
+                    not _unsafe_bypass
+                    and _current_refs_fname
+                    and self._would_create_back_import(fname, self._current_filename)
+                )
+                if self._is_file_root_type(fname, type_name or "") and not _unsafe_bypass and _current_refs_fname and not _back_import:
                     namespace = self._namespace_for(fp)
                     self._imports[namespace] = self._tosca_file_for(fp)
                     return f"{namespace}:{type_name}"
@@ -1211,7 +1303,15 @@ class Converter:
                 # fname's independently-generated YAML would also import the
                 # current file back — bypassing would create a cycle.
                 _unsafe_bypass = _current_refs_fname and not _current_is_explicit_root
-                if self._is_file_root_type(fname, type_name_from_ref or "") and not _unsafe_bypass:
+                # Back-import guard: also block when independently converting
+                # fname.yaml would eventually produce a TOSCA import of current.yaml
+                # (e.g. fname has a versioned schema that refs current's base schema,
+                # creating a multi-hop cycle like Sensor→v1_12_0→Control→v1_7_0→Sensor).
+                _back_import = (
+                    not _unsafe_bypass
+                    and self._would_create_back_import(fname, self._current_filename)
+                )
+                if self._is_file_root_type(fname, type_name_from_ref or "") and not _unsafe_bypass and not _back_import:
                     namespace = self._namespace_for(file_part)
                     self._imports[namespace] = self._tosca_file_for(file_part)
                     ref_type_name = f"{namespace}:{type_name_from_ref}"
