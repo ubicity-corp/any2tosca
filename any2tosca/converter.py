@@ -1117,9 +1117,31 @@ class Converter:
                 # fall through to inline processing below
             else:
                 ref_type_name = self._ref_to_tosca_type(ref)
-                ref_schema = self.resolve_ref(ref, root_schema)
-                merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
-                return self._build_simple_prop_def(ref_type_name, merged, prop_name, required_props)
+                # _ref_to_tosca_type may have just discovered this file is
+                # circular (on-the-fly, not pre-scanned) and added it to
+                # _no_import_files, returning only a bare type name.  Detect
+                # this case and apply the same circular handling as above.
+                fname = Path(file_part).name if file_part else ""
+                if fname and fname in self._no_import_files:
+                    if self._is_file_root_type(fname, type_name_from_ref or ""):
+                        # Namespace was already registered by _ref_to_tosca_type
+                        # only if it was not circular — here it was circular so
+                        # ref_type_name is bare; rebuild with namespace.
+                        namespace = self._namespace_for(file_part)
+                        self._imports[namespace] = self._tosca_file_for(file_part)
+                        ref_type_name = f"{namespace}:{type_name_from_ref}"
+                        ref_schema = self.resolve_ref(ref, root_schema)
+                        merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
+                        return self._build_simple_prop_def(ref_type_name, merged, prop_name, required_props)
+                    # Not a file-root type — inline the schema instead of
+                    # using the bare type name returned by _ref_to_tosca_type.
+                    ref_schema = self._resolve_for_merge(ref, root_schema)
+                    prop_schema = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
+                    # fall through to inline processing below
+                else:
+                    ref_schema = self.resolve_ref(ref, root_schema)
+                    merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
+                    return self._build_simple_prop_def(ref_type_name, merged, prop_name, required_props)
 
         json_type = prop_schema.get("type")
 
