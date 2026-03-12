@@ -69,6 +69,7 @@ class Converter:
         # Per-conversion cache (reset each convert_schema call)
         self._transitive_back_cache: dict[str, bool] = {}  # start_fname → bool (for current _current_filename)
         # Per-conversion state (reset each convert_schema call)
+        self._current_file_refs: frozenset[str] = frozenset()  # direct refs of current file (from root_schema)
         self._expanded_link_types: set[str] = set()          # types expanded from Links props
         self._relationship_types: dict[str, Any] = {}        # name → relationship type dict
         self._node_type_names: set[str] = set() # names that are node types in this file
@@ -838,6 +839,20 @@ class Converter:
 
         return False
 
+    def _is_explicit_file_root(self, fname: str) -> bool:
+        """Return True only if *fname* has an explicit top-level ``$ref`` to a definition.
+
+        Unlike :meth:`_is_file_root_type`, this does **not** apply the Redfish
+        heuristic (base-stem match).  It is used to distinguish resource schemas
+        with a definitive ``$ref: "#/definitions/Foo"`` (e.g.
+        ``Container.v1_0_1.json``) from utility/library schemas that omit the
+        top-level ``$ref`` (e.g. ``Resource.json``).
+        """
+        doc = self._load_cached_doc(fname)
+        if doc is None:
+            return False
+        return "#/definitions/" in doc.get("$ref", "")
+
     def _is_node_type_tosca(self, tosca_type: str) -> bool:
         """Return True if *tosca_type* refers to a TOSCA node type rather than a data type.
 
@@ -1098,16 +1113,47 @@ class Converter:
                 # current file directly refs it and is therefore blocked from
                 # the other file's perspective.  This mirrors the same bypass
                 # used in _resolve_entry_type for list items.
+                #
+                # Unsafe-bypass guard: skip the file-root bypass when the
+                # referenced file directly refs the current file AND the current
+                # file is not an explicit-root resource schema.  This prevents
+                # utility library schemas (e.g. Resource.json, which refs
+                # LogEntry.json directly) from importing the current file back
+                # when processing LogEntry.json — that would create a cycle:
+                # LogEntry.yaml → Resource.yaml → LogEntry.yaml.
                 fname = Path(file_part).name
-                if self._is_file_root_type(fname, type_name_from_ref or ""):
+                # Does the current file directly ref fname? Use _current_file_refs
+                # (pre-computed from the in-memory root schema) so this works even
+                # when the source file is not present on disk.
+                _current_refs_fname = fname in self._current_file_refs
+                _current_is_explicit_root = self._is_explicit_file_root(self._current_filename)
+                # Unsafe-bypass guard: when the current file is a utility library
+                # (no explicit top-level $ref) that directly refs fname, then
+                # fname's independently-generated YAML would also import the
+                # current file back — bypassing would create a cycle.
+                _unsafe_bypass = _current_refs_fname and not _current_is_explicit_root
+                if self._is_file_root_type(fname, type_name_from_ref or "") and not _unsafe_bypass:
                     namespace = self._namespace_for(file_part)
                     self._imports[namespace] = self._tosca_file_for(file_part)
                     ref_type_name = f"{namespace}:{type_name_from_ref}"
                     ref_schema = self.resolve_ref(ref, root_schema)
                     merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
                     return self._build_simple_prop_def(ref_type_name, merged, prop_name, required_props)
-                # Not a file-root type — resolve the schema inline and fall
-                # through to normal type detection.
+                # Not a file-root type (or unsafe bypass): check if fname
+                # directly refs the current file — if so, a safe one-directional
+                # import is possible (step-1 allow).
+                # Example: Resource.json refs LogEntry.json directly, so when
+                # converting LogEntry.json we can safely import Resource.yaml
+                # because Resource.yaml itself won't import LogEntry.yaml back.
+                if not _unsafe_bypass and not _current_refs_fname and self._current_filename in self._ref_fnames_for(fname):
+                    # fname directly refs the current file → safe to import
+                    namespace = self._namespace_for(file_part)
+                    self._imports[namespace] = self._tosca_file_for(file_part)
+                    ref_type_name = f"{namespace}:{type_name_from_ref}"
+                    ref_schema = self.resolve_ref(ref, root_schema)
+                    merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
+                    return self._build_simple_prop_def(ref_type_name, merged, prop_name, required_props)
+                # Inline the schema — resolve and fall through to normal type detection.
                 # Use _resolve_for_merge (not resolve_ref) so that any local
                 # #/... refs inside the resolved schema are rewritten to
                 # filename#/... — otherwise they resolve against root_schema
@@ -1120,10 +1166,14 @@ class Converter:
                 # _ref_to_tosca_type may have just discovered this file is
                 # circular (on-the-fly, not pre-scanned) and added it to
                 # _no_import_files, returning only a bare type name.  Detect
-                # this case and apply the same circular handling as above.
+                # this case and apply the same circular handling as above
+                # (including the unsafe-bypass guard and step-1 allow).
                 fname = Path(file_part).name if file_part else ""
                 if fname and fname in self._no_import_files:
-                    if self._is_file_root_type(fname, type_name_from_ref or ""):
+                    _current_refs_fname = fname in self._current_file_refs
+                    _current_is_explicit_root = self._is_explicit_file_root(self._current_filename)
+                    _unsafe_bypass = _current_refs_fname and not _current_is_explicit_root
+                    if self._is_file_root_type(fname, type_name_from_ref or "") and not _unsafe_bypass:
                         # Namespace was already registered by _ref_to_tosca_type
                         # only if it was not circular — here it was circular so
                         # ref_type_name is bare; rebuild with namespace.
@@ -1133,8 +1183,16 @@ class Converter:
                         ref_schema = self.resolve_ref(ref, root_schema)
                         merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
                         return self._build_simple_prop_def(ref_type_name, merged, prop_name, required_props)
-                    # Not a file-root type — inline the schema instead of
-                    # using the bare type name returned by _ref_to_tosca_type.
+                    # Step-1 allow: fname directly refs current file → safe import.
+                    if not _unsafe_bypass and not _current_refs_fname and self._current_filename in self._ref_fnames_for(fname):
+                        namespace = self._namespace_for(file_part)
+                        self._imports[namespace] = self._tosca_file_for(file_part)
+                        ref_type_name = f"{namespace}:{type_name_from_ref}"
+                        ref_schema = self.resolve_ref(ref, root_schema)
+                        merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
+                        return self._build_simple_prop_def(ref_type_name, merged, prop_name, required_props)
+                    # Not a file-root type and no safe import — inline the schema
+                    # instead of using the bare type name from _ref_to_tosca_type.
                     ref_schema = self._resolve_for_merge(ref, root_schema)
                     prop_schema = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
                     # fall through to inline processing below
@@ -1328,6 +1386,10 @@ class Converter:
             source_path.name if source_path
             else Path(root_schema.get("$id", "")).name
         )
+        # Pre-compute direct refs from the in-memory root schema so that
+        # _current_refs_fname checks work even when the source file is not
+        # present on disk (where _ref_fnames_for would return empty).
+        self._current_file_refs = frozenset(self._collect_ref_fnames(root_schema))
         self._node_type_names = set(node_type_names)
         self._collect_no_import_files(root_schema)
         data_types: dict[str, Any] = {}
