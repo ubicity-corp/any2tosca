@@ -779,7 +779,11 @@ class Converter:
                             _current_refs_fname = fname_best in self._current_file_refs
                             _current_is_explicit_root = self._is_explicit_file_root(self._current_filename)
                             _unsafe_bypass = _current_refs_fname and not _current_is_explicit_root
-                            if not _unsafe_bypass:
+                            # Also block if the versioned file refs our own root type back —
+                            # that would cause the versioned YAML to import ours when
+                            # independently converted, creating a TOSCA cycle.
+                            _back_imports = self._versioned_refs_our_root_type(fname_best)
+                            if not _unsafe_bypass and not _back_imports:
                                 namespace = self._namespace_for(file_part)
                                 self._imports[namespace] = self._tosca_file_for(file_part)
                                 derived_from = f"{namespace}:{type_name_from_ref}"
@@ -869,6 +873,43 @@ class Converter:
                 return True
 
         return False
+
+    def _versioned_refs_our_root_type(self, versioned_fname: str) -> bool:
+        """Return True if *versioned_fname* contains a ``$ref`` pointing to the
+        current file's root definition (e.g.
+        ``EthernetInterface.json#/definitions/EthernetInterface``).
+
+        When this is true, the versioned file would import the current file's
+        YAML when independently converted (the file-root bypass would fire),
+        so using it as ``derived_from`` from the current file would create a
+        circular TOSCA import.
+        """
+        if not self._current_filename:
+            return False
+        cur_doc = self._load_cached_doc(self._current_filename)
+        if cur_doc is None:
+            return False
+        cur_root_ref = cur_doc.get("$ref", "")
+        if not cur_root_ref.startswith("#/definitions/"):
+            return False
+        cur_root_type = cur_root_ref[len("#/definitions/"):]
+        versioned_doc = self._load_cached_doc(versioned_fname)
+        if versioned_doc is None:
+            return False
+
+        def _has_root_ref(obj: Any) -> bool:
+            if isinstance(obj, dict):
+                ref = obj.get("$ref", "")
+                if ref:
+                    fp, tn = self._parse_ref(ref)
+                    if fp is not None and Path(fp).name == self._current_filename and tn == cur_root_type:
+                        return True
+                return any(_has_root_ref(v) for v in obj.values())
+            if isinstance(obj, list):
+                return any(_has_root_ref(v) for v in obj)
+            return False
+
+        return _has_root_ref(versioned_doc)
 
     def _is_explicit_file_root(self, fname: str) -> bool:
         """Return True only if *fname* has an explicit top-level ``$ref`` to a definition.
