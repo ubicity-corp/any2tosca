@@ -583,9 +583,10 @@ class Converter:
 
         - ``"local"``       — pure ``$ref`` to a local ``#/...`` target.
         - ``"versioned"``   — pure ``$ref`` to a versioned external file
-          (``BaseName.vX_Y_Z``), not circular.
-        - ``"circular"``    — pure ``$ref`` to an external file that is in
-          ``_no_import_files`` or references the current file back.
+          (``BaseName.vX_Y_Z``), including circular ones (they can still be
+          picked as ``derived_from`` via the file-root bypass).
+        - ``"circular"``    — pure ``$ref`` to a non-versioned external file
+          that is in ``_no_import_files`` or references the current file back.
         - ``"unversioned"`` — pure ``$ref`` to any other external file.
         - ``"inline"``      — member has no ``$ref``, or has ``$ref`` plus
           additional keys (mixed schema).
@@ -597,16 +598,18 @@ class Converter:
             return "local"
         uri = ref.partition("#")[0]
         fname = Path(uri).name
-        if fname in self._no_import_files:
-            return "circular"
         stem = Path(uri.split("/")[-1]).stem
         if self._VER_RE.match(stem):
+            # Versioned refs are always classified as "versioned" regardless of
+            # circularity — _merge_allof uses the file-root bypass to import the
+            # winning version even when it back-refs the current file.
             if self._refs_back_to_current(ref):
                 if fname:
                     self._mark_no_import(fname)
-                return "circular"
             return "versioned"
         else:
+            if fname in self._no_import_files:
+                return "circular"
             if self._refs_back_to_current_transitive(ref):
                 if fname:
                     self._mark_no_import(fname)
@@ -760,6 +763,25 @@ class Converter:
             best = self._pick_latest_versioned_ref(next(iter(versioned_groups.values())))
             if best is not None:
                 derived_from = self._ref_to_tosca_type(best)
+                # If the best versioned ref was circular, _ref_to_tosca_type
+                # returned a bare type name (no import recorded).  Apply the
+                # file-root bypass: versioned files are always file-root types
+                # and the current file directly refs them (they're in its anyOf),
+                # so as long as the current file has an explicit root ($ref) or
+                # the versioned file doesn't ref the current file back in a way
+                # that would create a TOSCA cycle, we can force-import it.
+                if best and ":" not in derived_from:
+                    file_part, type_name_from_ref = self._parse_ref(best)
+                    if file_part is not None:
+                        fname_best = Path(file_part).name
+                        if fname_best in self._no_import_files and self._is_file_root_type(fname_best, type_name_from_ref or ""):
+                            _current_refs_fname = fname_best in self._current_file_refs
+                            _current_is_explicit_root = self._is_explicit_file_root(self._current_filename)
+                            _unsafe_bypass = _current_refs_fname and not _current_is_explicit_root
+                            if not _unsafe_bypass:
+                                namespace = self._namespace_for(file_part)
+                                self._imports[namespace] = self._tosca_file_for(file_part)
+                                derived_from = f"{namespace}:{type_name_from_ref}"
             # Any local ref defers to the versioned winner — merge it inline
             if first_local_ref:
                 to_merge_refs.append(first_local_ref)
@@ -1396,7 +1418,7 @@ class Converter:
         node_types: dict[str, Any] = {}
 
         def _add(tosca_name: str, schema: dict[str, Any], root: dict[str, Any]) -> None:
-            if tosca_name in node_type_names:
+            if tosca_name in self._node_type_names:
                 node_types[tosca_name] = self.schema_to_tosca_node_type(
                     tosca_name, schema, root, data_types
                 )
