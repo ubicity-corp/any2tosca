@@ -1248,6 +1248,12 @@ class Converter:
         json_type = schema.get("type")
         if schema.get("properties"):
             safe_name = self.sanitize_name(type_name)
+            # If this type is a known node type (e.g. it is the current file's
+            # root type, or was promoted by _mark_no_import), don't create a
+            # duplicate data type entry — the main conversion pass will define
+            # it as a node type via _add.
+            if safe_name in self._node_type_names:
+                return safe_name
             if safe_name not in data_types:
                 data_types[safe_name] = {}  # sentinel: breaks recursive cycles
                 data_types[safe_name] = self.schema_to_tosca_data_type(
