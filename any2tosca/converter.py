@@ -764,7 +764,7 @@ class Converter:
             if best is not None:
                 derived_from = self._ref_to_tosca_type(best)
                 # If the best versioned ref was circular, _ref_to_tosca_type
-                # returned a bare type name (no import recorded).  Apply the
+                # returned a bare type name (no import recorded).  Try the
                 # file-root bypass: versioned files are always file-root types
                 # and the current file directly refs them (they're in its anyOf),
                 # so as long as the current file has an explicit root ($ref) or
@@ -772,6 +772,7 @@ class Converter:
                 # that would create a TOSCA cycle, we can force-import it.
                 if best and ":" not in derived_from:
                     file_part, type_name_from_ref = self._parse_ref(best)
+                    bypassed = False
                     if file_part is not None:
                         fname_best = Path(file_part).name
                         if fname_best in self._no_import_files and self._is_file_root_type(fname_best, type_name_from_ref or ""):
@@ -782,6 +783,14 @@ class Converter:
                                 namespace = self._namespace_for(file_part)
                                 self._imports[namespace] = self._tosca_file_for(file_part)
                                 derived_from = f"{namespace}:{type_name_from_ref}"
+                                bypassed = True
+                    if not bypassed:
+                        # Circular and not a file-root type (e.g. a sub-definition
+                        # like AdditionalVersions inside a versioned file) — cannot
+                        # import, so the bare derived_from would be a self-reference.
+                        # Fall back to merging all versioned refs inline instead.
+                        derived_from = None
+                        to_merge_refs.extend(next(iter(versioned_groups.values())))
             # Any local ref defers to the versioned winner — merge it inline
             if first_local_ref:
                 to_merge_refs.append(first_local_ref)
