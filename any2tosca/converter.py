@@ -68,6 +68,7 @@ class Converter:
         self._reachable_cache: dict[str, frozenset[str]] = {}   # start_fname → all reachable fnames
         # Per-conversion cache (reset each convert_schema call)
         self._transitive_back_cache: dict[str, bool] = {}  # start_fname → bool (for current _current_filename)
+        self._back_import_cache: dict[tuple[str, str], bool] = {}  # (fname, checking_for) → bool
         # Per-conversion state (reset each convert_schema call)
         self._current_file_refs: frozenset[str] = frozenset()  # direct refs of current file (from root_schema)
         self._expanded_link_types: set[str] = set()          # types expanded from Links props
@@ -969,6 +970,8 @@ class Converter:
         if _stack is None:
             _stack = frozenset()
         key = (fname, checking_for)
+        if key in self._back_import_cache:
+            return self._back_import_cache[key]
         if key in _stack:
             # Mutual recursion detected.  Break symmetry: return True when
             # fname > checking_base, False when fname < checking_base.
@@ -977,7 +980,9 @@ class Converter:
                 _cb = re.sub(r"\.v\d.*$", "", _checking_stem_r) + Path(checking_for).suffix
             else:
                 _cb = checking_for
-            return fname > _cb
+            result = fname > _cb
+            self._back_import_cache[key] = result
+            return result
         _stack = _stack | {key}
 
         fname_doc = self._load_cached_doc(fname)
@@ -1028,7 +1033,9 @@ class Converter:
                 # through this versioned schema and we can safely skip it.
                 if self._would_create_back_import(checking_base, versioned_fname, _stack):
                     continue  # that hop is blocked → no real cycle via this V
+                self._back_import_cache[key] = True
                 return True
+        self._back_import_cache[key] = False
         return False
 
     def _is_explicit_file_root(self, fname: str) -> bool:
@@ -1611,6 +1618,7 @@ class Converter:
         self._expanded_link_types = set()
         self._relationship_types = {}
         self._transitive_back_cache = {}
+        self._back_import_cache = {}
         self._current_filename = (
             source_path.name if source_path
             else Path(root_schema.get("$id", "")).name
