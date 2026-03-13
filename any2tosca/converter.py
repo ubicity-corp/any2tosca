@@ -488,7 +488,10 @@ class Converter:
             if self._refs_back_to_current(ref):
                 self._mark_no_import(fname)
                 return type_name
-        elif self._would_create_back_import(fname, self._current_filename):
+        elif (
+            self._would_create_back_import(fname, self._current_filename)
+            or self._refs_back_to_current_transitive(fname)
+        ):
             self._mark_no_import(fname)
             return type_name
         namespace = self._namespace_for(file_part)

@@ -785,6 +785,93 @@ def test_circular_import_suppressed_transitive(tmp_path: Path):
     assert item_type == "string", f"Expected 'string', got: {item_type!r}"
 
 
+def test_circular_import_deep_chain_via_versioned_schema(tmp_path: Path):
+    """Deep transitive cycle discovered via versioned schema refs must not create circular imports.
+
+    Scenario (mirrors the real EthernetInterface→Chassis→…→EthernetInterface case):
+
+      Main.json has anyOf → Main.v1_0_0.json
+      Main.v1_0_0.json refs Other.json (the ref is inside the versioned schema,
+        NOT in Main.json's root, so _collect_no_import_files never sees it)
+      Other.json → Other.v1_0_0.json → Mid.json → Mid.v1_0_0.json → Main.json
+        (closes the cycle through multiple hops)
+
+    Converting Main.json must not import Other.yaml.
+    """
+    # Mid.v1_0_0.json refs back to Main.json
+    (tmp_path / "Mid.v1_0_0.json").write_text(json.dumps({
+        "$id": "http://example.com/Mid.v1_0_0.json",
+        "definitions": {
+            "MidRes": {
+                "type": "object",
+                "properties": {
+                    "link": {"$ref": "http://example.com/Main.json#/definitions/Root"},
+                },
+            },
+        },
+    }))
+    # Mid.json refs Mid.v1_0_0.json
+    (tmp_path / "Mid.json").write_text(json.dumps({
+        "$id": "http://example.com/Mid.json",
+        "definitions": {
+            "MidRes": {"anyOf": [
+                {"$ref": "http://example.com/Mid.v1_0_0.json#/definitions/MidRes"},
+            ]},
+        },
+    }))
+    # Other.v1_0_0.json refs Mid.json
+    (tmp_path / "Other.v1_0_0.json").write_text(json.dumps({
+        "$id": "http://example.com/Other.v1_0_0.json",
+        "definitions": {
+            "OtherRes": {
+                "type": "object",
+                "properties": {
+                    "mid": {"$ref": "http://example.com/Mid.json#/definitions/MidRes"},
+                },
+            },
+        },
+    }))
+    # Other.json refs Other.v1_0_0.json
+    (tmp_path / "Other.json").write_text(json.dumps({
+        "$id": "http://example.com/Other.json",
+        "definitions": {
+            "OtherRes": {"anyOf": [
+                {"$ref": "http://example.com/Other.v1_0_0.json#/definitions/OtherRes"},
+            ]},
+        },
+    }))
+    # Main.v1_0_0.json refs Other.json (the ref that would create the cycle
+    # if Other.json were imported — but Main.json's root does NOT ref Other.json)
+    (tmp_path / "Main.v1_0_0.json").write_text(json.dumps({
+        "$id": "http://example.com/Main.v1_0_0.json",
+        "definitions": {
+            "Root": {
+                "type": "object",
+                "properties": {
+                    "other": {"$ref": "http://example.com/Other.json#/definitions/OtherRes"},
+                },
+            },
+        },
+    }))
+    # Main.json has anyOf → Main.v1_0_0.json (root does NOT directly ref Other.json)
+    main_schema = {
+        "$id": "http://example.com/Main.json",
+        "definitions": {
+            "Root": {"anyOf": [
+                {"$ref": "http://example.com/Main.v1_0_0.json#/definitions/Root"},
+            ]},
+        },
+    }
+    result = convert_schema(
+        main_schema, "Main",
+        base_path=tmp_path,
+        source_path=tmp_path / "Main.json",
+    )
+    # Other.yaml must not appear in imports — that would close the cycle
+    assert not any("Other" in v for v in result.imports.values()), \
+        f"Unexpected Other import creates circular chain: {result.imports}"
+
+
 # ── CLI integration tests ─────────────────────────────────────────────────────
 
 @pytest.fixture()
