@@ -933,10 +933,7 @@ class Converter:
 
         return _has_root_ref(versioned_doc)
 
-    def _would_create_back_import(
-        self, fname: str, checking_for: str,
-        _stack: frozenset[tuple[str, str]] | None = None,
-    ) -> bool:
+    def _would_create_back_import(self, fname: str, checking_for: str) -> bool:
         """Return True if independently converting *fname* would eventually produce
         a TOSCA import of *checking_for*, which would create a circular import.
 
@@ -956,34 +953,15 @@ class Converter:
         Control.yaml, which imports Control.v1_7_0.yaml — creating the cycle
         Control.v1_7_0.yaml → Sensor.yaml → … → Control.v1_7_0.yaml.
 
-        Counter-check: when V refs *checking_base*, also verify that the link
-        V.yaml → checking_base.yaml would actually happen.  If
-        ``_would_create_back_import(checking_base, V)`` is True, that link is
-        itself blocked, so no real cycle exists through this V.
-
-        Mutual-recursion tie-breaker: when both (fname, checking_for) and
-        (checking_base, V) mutually block each other, the recursion guard
-        returns ``fname > checking_base`` lexicographically.  This deterministically
-        allows the pair with the alphabetically earlier fname (e.g.
-        Control.json < Sensor.json) while keeping the other pair blocked.
+        This is a genuine symmetric cycle: both Sensor.v1_12_0→Control and
+        Control.v1_7_0→Sensor are mutual back-imports.  Both directions are
+        blocked, leaving each with a bare (unnamespaced) type reference for
+        the other family.  This is a known limitation for mutually-circular
+        Redfish schema families.
         """
-        if _stack is None:
-            _stack = frozenset()
         key = (fname, checking_for)
         if key in self._back_import_cache:
             return self._back_import_cache[key]
-        if key in _stack:
-            # Mutual recursion detected.  Break symmetry: return True when
-            # fname > checking_base, False when fname < checking_base.
-            _checking_stem_r = Path(checking_for).stem
-            if self._VER_RE.match(_checking_stem_r):
-                _cb = re.sub(r"\.v\d.*$", "", _checking_stem_r) + Path(checking_for).suffix
-            else:
-                _cb = checking_for
-            result = fname > _cb
-            self._back_import_cache[key] = result
-            return result
-        _stack = _stack | {key}
 
         fname_doc = self._load_cached_doc(fname)
         if fname_doc is None:
@@ -1028,11 +1006,6 @@ class Converter:
             # Check if it directly refs checking_for or its unversioned base.
             v_direct_refs = self._ref_fnames_for(versioned_fname)
             if checking_for in v_direct_refs or checking_base in v_direct_refs:
-                # Counter-check: would the link versioned_fname.yaml → checking_base.yaml
-                # itself be blocked?  If so, the predicted cycle doesn't actually occur
-                # through this versioned schema and we can safely skip it.
-                if self._would_create_back_import(checking_base, versioned_fname, _stack):
-                    continue  # that hop is blocked → no real cycle via this V
                 self._back_import_cache[key] = True
                 return True
         self._back_import_cache[key] = False
