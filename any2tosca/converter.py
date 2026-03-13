@@ -986,13 +986,6 @@ class Converter:
         fname_doc = self._load_cached_doc(fname)
         if fname_doc is None:
             return False
-        # Get fname's root definition type name
-        fname_root_ref = fname_doc.get("$ref", "")
-        fname_root_type = (
-            fname_root_ref[len("#/definitions/"):]
-            if fname_root_ref.startswith("#/definitions/")
-            else ""
-        )
         # Determine the unversioned "base" of checking_for
         checking_stem = Path(checking_for).stem
         if self._VER_RE.match(checking_stem):
@@ -1000,30 +993,15 @@ class Converter:
             checking_base = base_name + Path(checking_for).suffix
         else:
             checking_base = checking_for
-        # Iterate over versioned schemas directly referenced by fname
+        # Iterate over versioned schemas directly referenced by fname.
+        # We intentionally do NOT skip schemas that ref fname's root type
+        # (which would block them as derived_from): even "blocked" versioned
+        # schemas still have their properties merged into the converted type,
+        # so any external refs they contain DO generate TOSCA imports.
         for versioned_fname in self._ref_fnames_for(fname):
             if not self._VER_RE.match(Path(versioned_fname).stem):
                 continue
-            # Would this versioned schema be blocked as derived_from?
-            # Blocked when it refs fname's root type (same logic as _versioned_refs_our_root_type)
-            if fname_root_type:
-                v_doc = self._load_cached_doc(versioned_fname)
-                if v_doc is not None:
-                    def _refs_fname_root(obj: Any) -> bool:
-                        if isinstance(obj, dict):
-                            ref = obj.get("$ref", "")
-                            if ref:
-                                fp, tn = self._parse_ref(ref)
-                                if fp is not None and Path(fp).name == fname and tn == fname_root_type:
-                                    return True
-                            return any(_refs_fname_root(v) for v in obj.values())
-                        if isinstance(obj, list):
-                            return any(_refs_fname_root(v) for v in obj)
-                        return False
-                    if _refs_fname_root(v_doc):
-                        continue  # would be blocked as derived_from → skip
-            # This versioned schema would be imported as derived_from.
-            # Check if it directly refs checking_for or its unversioned base.
+            # Check if this versioned schema directly refs checking_for or its unversioned base.
             v_direct_refs = self._ref_fnames_for(versioned_fname)
             if checking_for in v_direct_refs or checking_base in v_direct_refs:
                 # Counter-check: would converting checking_base also create a
