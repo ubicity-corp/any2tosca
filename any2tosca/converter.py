@@ -15,7 +15,7 @@ from typing import Any, NamedTuple
 from referencing import Registry, Resource
 from referencing.jsonschema import DRAFT7
 
-from .yaml_utils import FoldedStr
+from .yaml_utils import CommentedOut, FoldedStr
 
 __all__ = ["Converter", "ConversionResult", "convert_schema", "build_tosca_document"]
 
@@ -933,7 +933,12 @@ class Converter:
 
         return _has_root_ref(versioned_doc)
 
-    def _would_create_back_import(self, fname: str, checking_for: str) -> bool:
+    def _would_create_back_import(
+        self,
+        fname: str,
+        checking_for: str,
+        _stack: frozenset[tuple[str, str]] | None = None,
+    ) -> bool:
         """Return True if independently converting *fname* would eventually produce
         a TOSCA import of *checking_for*, which would create a circular import.
 
@@ -953,15 +958,30 @@ class Converter:
         Control.yaml, which imports Control.v1_7_0.yaml — creating the cycle
         Control.v1_7_0.yaml → Sensor.yaml → … → Control.v1_7_0.yaml.
 
-        This is a genuine symmetric cycle: both Sensor.v1_12_0→Control and
-        Control.v1_7_0→Sensor are mutual back-imports.  Both directions are
-        blocked, leaving each with a bare (unnamespaced) type reference for
-        the other family.  This is a known limitation for mutually-circular
-        Redfish schema families.
+        Symmetric cycles are broken lexicographically: when mutual recursion is
+        detected (the same ``(fname, checking_for)`` key appears in ``_stack``),
+        the call returns ``fname > checking_base``.  This means the
+        lexicographically smaller family (e.g. Control) is the *winner* (returns
+        False → allowed to import the other family), and the larger one (e.g.
+        Sensor) is the *loser* (returns True → the node reference is commented out).
         """
+        if _stack is None:
+            _stack = frozenset()
         key = (fname, checking_for)
         if key in self._back_import_cache:
             return self._back_import_cache[key]
+        # Mutual-recursion sentinel: same call already in the stack → cycle detected.
+        # Break symmetry lexicographically: the larger fname loses.
+        if key in _stack:
+            checking_stem_r = Path(checking_for).stem
+            if self._VER_RE.match(checking_stem_r):
+                checking_base_r = re.sub(r"\.v\d.*$", "", checking_stem_r) + Path(checking_for).suffix
+            else:
+                checking_base_r = checking_for
+            result = fname > checking_base_r
+            self._back_import_cache[key] = result
+            return result
+        _stack = _stack | {key}
 
         fname_doc = self._load_cached_doc(fname)
         if fname_doc is None:
@@ -1006,6 +1026,11 @@ class Converter:
             # Check if it directly refs checking_for or its unversioned base.
             v_direct_refs = self._ref_fnames_for(versioned_fname)
             if checking_for in v_direct_refs or checking_base in v_direct_refs:
+                # Counter-check: would converting checking_base also create a
+                # back-import of fname?  If so the cycle is mutual and the
+                # lexicographic loser (larger fname) is the one that's blocked.
+                if self._would_create_back_import(checking_base, versioned_fname, _stack):
+                    continue  # mutual cycle — this hop is already handled on the other side
                 self._back_import_cache[key] = True
                 return True
         self._back_import_cache[key] = False
@@ -1029,10 +1054,14 @@ class Converter:
         """Return True if *tosca_type* refers to a TOSCA node type rather than a data type.
 
         - TOSCA primitives are never node types.
+        - ``CommentedOut`` values are always node types (only created for confirmed
+          file-root node types in circular-import losers).
         - Local (unqualified) types are checked against ``_node_type_names``.
         - Namespaced types (``namespace:TypeName``) are checked against the
           root definition of the corresponding external JSON Schema file.
         """
+        if isinstance(tosca_type, CommentedOut):
+            return True
         if tosca_type in self._TOSCA_PRIMITIVES:
             return False
         if ":" in tosca_type:
@@ -1233,6 +1262,10 @@ class Converter:
                     namespace = self._namespace_for(fp)
                     self._imports[namespace] = self._tosca_file_for(fp)
                     return f"{namespace}:{type_name}"
+                # Loser in a symmetric circular dependency: emit the type reference
+                # as a commented-out value so the intent is visible in the output.
+                if _back_import and self._is_file_root_type(fname, type_name or ""):
+                    return CommentedOut(f"{self._namespace_for(fp)}:{type_name}")
                 resolved = self._resolve_for_merge(ref, root_schema)
                 resolved = {**resolved, **{k: v for k, v in item_schema.items() if k != "$ref"}}
                 return self._inline_type_or_primitive(type_name, resolved, root_schema, data_types)
@@ -1334,6 +1367,14 @@ class Converter:
                     namespace = self._namespace_for(file_part)
                     self._imports[namespace] = self._tosca_file_for(file_part)
                     ref_type_name = f"{namespace}:{type_name_from_ref}"
+                    ref_schema = self.resolve_ref(ref, root_schema)
+                    merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
+                    return self._build_simple_prop_def(ref_type_name, merged, prop_name, required_props)
+                # Loser in a symmetric circular dependency: emit the type reference
+                # as a commented-out value so the intent is visible in the output.
+                if _back_import and self._is_file_root_type(fname, type_name_from_ref or ""):
+                    namespace = self._namespace_for(file_part)
+                    ref_type_name = CommentedOut(f"{namespace}:{type_name_from_ref}")
                     ref_schema = self.resolve_ref(ref, root_schema)
                     merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
                     return self._build_simple_prop_def(ref_type_name, merged, prop_name, required_props)
