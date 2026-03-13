@@ -488,7 +488,7 @@ class Converter:
             if self._refs_back_to_current(ref):
                 self._mark_no_import(fname)
                 return type_name
-        elif self._refs_back_to_current_transitive(ref):
+        elif self._would_create_back_import(fname, self._current_filename):
             self._mark_no_import(fname)
             return type_name
         namespace = self._namespace_for(file_part)
@@ -1297,10 +1297,30 @@ class Converter:
                 # as a commented-out value so the intent is visible in the output.
                 if _back_import and self._is_file_root_type(fname, type_name or ""):
                     return CommentedOut(f"{self._namespace_for(fp)}:{type_name}")
+                # File-root node type discovered via an inlined external schema (not
+                # a direct ref of the current file).  We cannot inline a node type as
+                # a data type, and importing would be circular.  Emit CommentedOut.
+                if (self._is_file_root_type(fname, type_name or "")
+                        and not _unsafe_bypass and not _current_refs_fname):
+                    return CommentedOut(f"{self._namespace_for(fp)}:{type_name}")
                 resolved = self._resolve_for_merge(ref, root_schema)
                 resolved = {**resolved, **{k: v for k, v in item_schema.items() if k != "$ref"}}
                 return self._inline_type_or_primitive(type_name, resolved, root_schema, data_types)
-            return self._ref_to_tosca_type(ref)
+            ret = self._ref_to_tosca_type(ref)
+            # _ref_to_tosca_type may have just marked the file as no-import
+            # on-the-fly (because _would_create_back_import returned True).
+            # If the file was not directly referenced by the current schema,
+            # the ref was discovered via an inlined external schema — emit
+            # CommentedOut so the intent is visible rather than a bare type.
+            fname = Path(fp).name if fp else ""
+            if fname and fname in self._no_import_files and ":" not in ret:
+                _current_refs_fname = fname in self._current_file_refs
+                _current_is_explicit_root = self._is_explicit_file_root(self._current_filename)
+                _unsafe_bypass = _current_refs_fname and not _current_is_explicit_root
+                if (self._is_file_root_type(fname, type_name or "")
+                        and not _unsafe_bypass and not _current_refs_fname):
+                    return CommentedOut(f"{self._namespace_for(fp)}:{type_name}")
+            return ret
         return self.get_tosca_type(item_schema.get("type"), item_schema, root_schema)
 
     def _inline_type_or_primitive(
@@ -1459,6 +1479,16 @@ class Converter:
                         namespace = self._namespace_for(file_part)
                         self._imports[namespace] = self._tosca_file_for(file_part)
                         ref_type_name = f"{namespace}:{type_name_from_ref}"
+                        ref_schema = self.resolve_ref(ref, root_schema)
+                        merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
+                        return self._build_simple_prop_def(ref_type_name, merged, prop_name, required_props)
+                    # On-the-fly loser: circular file-root type encountered via an
+                    # inlined schema (not a direct ref of the current file).  A bare
+                    # type name would be unresolvable, so emit as CommentedOut so the
+                    # intent is visible in the output.
+                    if self._is_file_root_type(fname, type_name_from_ref or "") and not _unsafe_bypass and not _current_refs_fname:
+                        namespace = self._namespace_for(file_part)
+                        ref_type_name = CommentedOut(f"{namespace}:{type_name_from_ref}")
                         ref_schema = self.resolve_ref(ref, root_schema)
                         merged = {**ref_schema, **{k: v for k, v in prop_schema.items() if k != "$ref"}}
                         return self._build_simple_prop_def(ref_type_name, merged, prop_name, required_props)
