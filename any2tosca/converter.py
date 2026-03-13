@@ -26,6 +26,7 @@ class ConversionResult(NamedTuple):
     node_types: dict[str, Any]
     imports: dict[str, str] = {}           # namespace → tosca_file
     relationship_types: dict[str, Any] = {}  # name → TOSCA relationship type dict
+    interface_types: dict[str, Any] = {}   # name → TOSCA interface type dict
 
 
 class Converter:
@@ -73,6 +74,7 @@ class Converter:
         self._current_file_refs: frozenset[str] = frozenset()  # direct refs of current file (from root_schema)
         self._expanded_link_types: set[str] = set()          # types expanded from Links props
         self._relationship_types: dict[str, Any] = {}        # name → relationship type dict
+        self._interface_types: dict[str, Any] = {}           # name → TOSCA interface type dict
         self._node_type_names: set[str] = set() # names that are node types in this file
 
     def _all_dirs(self) -> list[Path]:
@@ -1220,6 +1222,129 @@ class Converter:
 
     # ── Core conversion ───────────────────────────────────────────────────────
 
+    def _extract_actions_interface(
+        self,
+        node_type_name: str,
+        actions_ref: str,
+        root_schema: dict[str, Any],
+    ) -> str | None:
+        """
+        Extract a Redfish ``Actions`` definition into a TOSCA interface type.
+
+        Each non-Oem property in the Actions definition (e.g.
+        ``"#ComputerSystem.Reset"``) is resolved to its action definition and
+        converted to a TOSCA operation:
+
+        - ``description`` / ``x-longDescription`` → operation ``description``
+        - ``parameters``                           → operation ``inputs``
+        - ``properties`` (e.g. ``target``, ``title``) → operation ``metadata``
+
+        For each parameter:
+
+        - ``$ref`` is converted via :meth:`_ref_to_tosca_type` (records import).
+        - ``description`` / ``x-longDescription`` → input ``description``.
+        - ``requiredParameter`` → input ``required``.
+
+        The generated interface type is stored in ``_interface_types`` under
+        ``{node_type_name}Actions``.  The ``Actions`` container type, any
+        ``OemActions`` type, and every individual action definition (e.g.
+        ``Reset``) are added to ``_expanded_link_types`` so they are removed
+        from the data/node type output.
+
+        Returns the interface type name, or ``None`` if no operations were
+        extracted.
+        """
+        resolved = self._resolve_for_merge(actions_ref, root_schema)
+        # Mark the Actions container for removal from data/node types output.
+        if actions_ref.startswith("#/definitions/"):
+            self._expanded_link_types.add(self.sanitize_name(actions_ref.split("/")[-1]))
+
+        operations: dict[str, Any] = {}
+        for pname, pschema in resolved.get("properties", {}).items():
+            if not isinstance(pschema, dict) or "$ref" not in pschema:
+                continue
+            action_ref = pschema["$ref"]
+
+            if pname == "Oem":
+                # Track OemActions for removal from output types.
+                if action_ref.startswith("#/definitions/"):
+                    self._expanded_link_types.add(
+                        self.sanitize_name(action_ref.split("/")[-1])
+                    )
+                continue
+
+            # Derive operation name: "#ComputerSystem.Reset" → "Reset"
+            op_name = self.sanitize_name(pname.split(".")[-1] if "." in pname else pname)
+
+            action_def = self.resolve_ref(action_ref, root_schema)
+            if not action_def:
+                continue
+
+            # Track the action definition for removal from output types.
+            if action_ref.startswith("#/definitions/"):
+                self._expanded_link_types.add(
+                    self.sanitize_name(action_ref.split("/")[-1])
+                )
+
+            operation: dict[str, Any] = {}
+
+            # description
+            desc = action_def.get("description") or action_def.get("x-longDescription")
+            if desc:
+                operation["description"] = FoldedStr(desc)
+
+            # properties (target, title, …) → metadata
+            props = action_def.get("properties", {})
+            if props:
+                metadata: dict[str, str] = {}
+                for prop_name, prop_schema in props.items():
+                    if not isinstance(prop_schema, dict):
+                        continue
+                    prop_desc = (
+                        prop_schema.get("description")
+                        or prop_schema.get("x-longDescription", "")
+                    )
+                    if prop_desc:
+                        metadata[prop_name] = prop_desc
+                if metadata:
+                    operation["metadata"] = metadata
+
+            # parameters → inputs
+            params = action_def.get("parameters", {})
+            if params:
+                inputs: dict[str, Any] = {}
+                for param_name, param_schema in params.items():
+                    if not isinstance(param_schema, dict):
+                        continue
+                    safe_param = self.sanitize_name(param_name)
+                    input_def: dict[str, Any] = {}
+                    if "$ref" in param_schema:
+                        input_type = self._ref_to_tosca_type(param_schema["$ref"])
+                    else:
+                        input_type = self.get_tosca_type(
+                            param_schema.get("type"), param_schema, root_schema
+                        )
+                    input_def["type"] = input_type
+                    param_desc = (
+                        param_schema.get("description")
+                        or param_schema.get("x-longDescription")
+                    )
+                    if param_desc:
+                        input_def["description"] = FoldedStr(param_desc)
+                    input_def["required"] = bool(param_schema.get("requiredParameter", False))
+                    inputs[safe_param] = input_def
+                if inputs:
+                    operation["inputs"] = inputs
+
+            operations[op_name] = operation
+
+        if not operations:
+            return None
+
+        interface_type_name = f"{node_type_name}Actions"
+        self._interface_types[interface_type_name] = {"operations": operations}
+        return interface_type_name
+
     def _build_simple_prop_def(
         self,
         tosca_type: str,
@@ -1552,6 +1677,7 @@ class Converter:
 
         if properties_schema:
             links_requirements: list[dict[str, Any]] = []
+            actions_interface: str | None = None
             regular_props: dict[str, Any] = {}
             for pname, pschema in properties_schema.items():
                 # Detect the Redfish Links pattern: a property named "Links"
@@ -1562,6 +1688,15 @@ class Converter:
                         and self._parse_ref(pschema["$ref"])[1] == "Links"):
                     links_requirements.extend(
                         self._expand_links_prop(type_name, pschema["$ref"], root_schema, data_types)
+                    )
+                # Detect the Redfish Actions pattern: a property named "Actions"
+                # whose $ref resolves to a type also named "Actions".  Convert
+                # each action into a TOSCA interface operation.
+                elif (is_node_type and pname == "Actions"
+                        and isinstance(pschema, dict) and "$ref" in pschema
+                        and self._parse_ref(pschema["$ref"])[1] == "Actions"):
+                    actions_interface = self._extract_actions_interface(
+                        type_name, pschema["$ref"], root_schema
                     )
                 else:
                     regular_props[pname] = pschema
@@ -1580,6 +1715,8 @@ class Converter:
                     tosca_type["properties"] = plain_props
                 if requirements:
                     tosca_type["requirements"] = requirements
+                if actions_interface:
+                    tosca_type["interfaces"] = {"Actions": {"type": actions_interface}}
             else:
                 tosca_type["properties"] = all_props
 
@@ -1673,6 +1810,7 @@ class Converter:
         self._no_import_files = set()
         self._expanded_link_types = set()
         self._relationship_types = {}
+        self._interface_types = {}
         self._transitive_back_cache = {}
         self._back_import_cache = {}
         self._current_filename = (
@@ -1791,6 +1929,7 @@ class Converter:
             node_types=node_types,
             imports=dict(self._imports),
             relationship_types=dict(self._relationship_types),
+            interface_types=dict(self._interface_types),
         )
 
     def build_tosca_document(
@@ -1798,6 +1937,7 @@ class Converter:
         data_types: dict[str, Any],
         node_types: dict[str, Any] | None = None,
         relationship_types: dict[str, Any] | None = None,
+        interface_types: dict[str, Any] | None = None,
         imports: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """Wrap type dicts in a full TOSCA service-template skeleton."""
@@ -1811,6 +1951,8 @@ class Converter:
             doc["data_types"] = data_types
         if relationship_types:
             doc["relationship_types"] = relationship_types
+        if interface_types:
+            doc["interface_types"] = interface_types
         if node_types:
             doc["node_types"] = node_types
         return doc
@@ -1834,6 +1976,9 @@ def build_tosca_document(
     data_types: dict[str, Any],
     node_types: dict[str, Any] | None = None,
     relationship_types: dict[str, Any] | None = None,
+    interface_types: dict[str, Any] | None = None,
     imports: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    return Converter().build_tosca_document(data_types, node_types, relationship_types, imports)
+    return Converter().build_tosca_document(
+        data_types, node_types, relationship_types, interface_types, imports
+    )

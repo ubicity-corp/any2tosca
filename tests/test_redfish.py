@@ -270,3 +270,178 @@ def test_links_property_expanded_to_requirements():
     wdo = result.relationship_types["WidgetDependsOn"]
     assert wdo["derived_from"] == "core:DependsOn"
     assert "Oem" in wdo["properties"]
+
+
+# ── Redfish Actions pattern ────────────────────────────────────────────────────
+
+# Schema with a node type that has an Actions property.
+# The Actions def contains two action entries:
+#   "#ComputerSystem.Reset" → Reset definition (with parameters and properties)
+#   "Oem"                   → OemActions definition (plain object, no operations)
+REDFISH_WITH_ACTIONS = {
+    "$ref": "#/definitions/ComputerSystem",
+    "definitions": {
+        "ComputerSystem": {
+            "type": "object",
+            "description": "A computer system.",
+            "properties": {
+                "Id":      {"type": "string"},
+                "Actions": {"$ref": "#/definitions/Actions"},
+            },
+        },
+        "Actions": {
+            "type": "object",
+            "description": "The available actions for this resource.",
+            "properties": {
+                "#ComputerSystem.Reset": {"$ref": "#/definitions/Reset"},
+                "Oem":                  {"$ref": "#/definitions/OemActions"},
+            },
+        },
+        "Reset": {
+            "type": "object",
+            "description": "This action resets the system.",
+            "parameters": {
+                "ResetType": {
+                    "type": "string",
+                    "description": "The type of reset.",
+                    "requiredParameter": True,
+                },
+            },
+            "properties": {
+                "target": {
+                    "type": "string",
+                    "description": "Link to invoke action",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Friendly action name",
+                },
+            },
+        },
+        "OemActions": {
+            "type": "object",
+            "description": "OEM extensions.",
+        },
+    },
+}
+
+
+def test_actions_property_converted_to_interface_type():
+    """Actions property is extracted into a TOSCA interface type, not kept as a property."""
+    root, node_type_names = n.normalize(REDFISH_WITH_ACTIONS)
+    result = Converter().convert_schema(root, "ComputerSystem", node_type_names)
+
+    assert "ComputerSystem" in result.node_types
+    cs = result.node_types["ComputerSystem"]
+
+    # Actions must not appear as a property on the node type
+    assert "Actions" not in cs.get("properties", {})
+
+    # An interface named "Actions" must appear on the node type, referencing the interface type
+    interfaces = cs.get("interfaces", {})
+    assert "Actions" in interfaces, f"Expected 'Actions' interface, got: {interfaces}"
+    assert interfaces["Actions"]["type"] == "ComputerSystemActions"
+
+    # The ComputerSystemActions interface type must be defined
+    assert "ComputerSystemActions" in result.interface_types
+    iface = result.interface_types["ComputerSystemActions"]
+
+    # The Reset operation must be present
+    ops = iface.get("operations", {})
+    assert "Reset" in ops, f"Expected 'Reset' operation, got: {list(ops)}"
+    reset_op = ops["Reset"]
+
+    # description from action definition
+    assert "resets the system" in reset_op.get("description", "")
+
+    # properties → metadata
+    metadata = reset_op.get("metadata", {})
+    assert "target" in metadata
+    assert "title" in metadata
+
+    # parameters → inputs
+    inputs = reset_op.get("inputs", {})
+    assert "ResetType" in inputs
+    rt = inputs["ResetType"]
+    assert rt["type"] == "string"
+    assert rt["required"] is True
+    assert "reset" in rt.get("description", "").lower()
+
+
+def test_actions_container_and_action_defs_removed_from_output():
+    """Actions, OemActions, and action definition types must not appear in data/node types."""
+    root, node_type_names = n.normalize(REDFISH_WITH_ACTIONS)
+    result = Converter().convert_schema(root, "ComputerSystem", node_type_names)
+
+    # Actions container type removed
+    assert "Actions" not in result.data_types
+    assert "Actions" not in result.node_types
+    # OemActions removed
+    assert "OemActions" not in result.data_types
+    assert "OemActions" not in result.node_types
+    # Individual action definition type removed
+    assert "Reset" not in result.data_types
+    assert "Reset" not in result.node_types
+
+
+def test_actions_with_external_param_ref(tmp_path):
+    """Action parameters that $ref an external type produce a namespaced input type."""
+    import json
+    from pathlib import Path
+    from any2tosca.converter import convert_schema
+
+    (tmp_path / "ResetType.json").write_text(json.dumps({
+        "$id": "http://example.com/ResetType.json",
+        "definitions": {
+            "ResetType": {
+                "type": "string",
+                "enum": ["On", "ForceOff", "GracefulShutdown"],
+            },
+        },
+    }))
+
+    schema = {
+        "$id": "http://example.com/System.json",
+        "$ref": "#/definitions/System",
+        "definitions": {
+            "System": {
+                "type": "object",
+                "properties": {
+                    "Actions": {"$ref": "#/definitions/Actions"},
+                },
+            },
+            "Actions": {
+                "type": "object",
+                "properties": {
+                    "#System.Reset": {"$ref": "#/definitions/Reset"},
+                },
+            },
+            "Reset": {
+                "type": "object",
+                "description": "Reset the system.",
+                "parameters": {
+                    "ResetType": {
+                        "$ref": "http://example.com/ResetType.json#/definitions/ResetType",
+                        "description": "The reset type.",
+                        "requiredParameter": True,
+                    },
+                },
+            },
+        },
+    }
+    root, node_type_names = n.normalize(schema)
+    result = convert_schema(root, "System", node_type_names,
+                            base_path=tmp_path,
+                            source_path=tmp_path / "System.json")
+
+    assert "SystemActions" in result.interface_types
+    reset_inputs = result.interface_types["SystemActions"]["operations"]["Reset"]["inputs"]
+    assert "ResetType" in reset_inputs
+    # Type must be namespaced (external ref was resolved and import recorded)
+    assert ":" in reset_inputs["ResetType"]["type"], (
+        f"Expected namespaced type, got: {reset_inputs['ResetType']['type']!r}"
+    )
+    # The external file must appear in imports
+    assert any("ResetType" in v for v in result.imports.values()), (
+        f"ResetType.yaml not in imports: {result.imports}"
+    )

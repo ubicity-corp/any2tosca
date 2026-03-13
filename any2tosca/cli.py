@@ -102,6 +102,7 @@ def _write_file(result: ConversionResult, input_path: Path, out_dir: Path) -> Pa
         result.data_types,
         result.node_types,
         result.relationship_types or None,
+        result.interface_types or None,
         result.imports or None,
     )
     out_path = out_dir / input_path.with_suffix(".yaml").name
