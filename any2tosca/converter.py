@@ -1050,6 +1050,32 @@ class Converter:
             return False
         return "#/definitions/" in doc.get("$ref", "")
 
+    def _external_defn_has_node_props(self, fname: str, type_name: str) -> bool:
+        """Return True if the definition *type_name* in external file *fname* has
+        any properties whose item or value type is a file-root node type.
+
+        This handles the case where a non-root type (e.g. ``RedundantGroup`` in
+        ``Redundancy.v1_7_0.json``) has list/single properties referencing other
+        node types (e.g. lists of ``Resource.json#/definitions/Resource``).
+        When converted independently, those properties become requirements, making
+        the type a node type.  We need to detect this here so we can classify the
+        type correctly when processing a referencing file.
+        """
+        doc = self._load_cached_doc(fname)
+        if doc is None:
+            return False
+        defn = doc.get("definitions", {}).get(type_name, {})
+        props = defn.get("properties", {})
+        for pdef in props.values():
+            # Single $ref directly on property, or list via items.$ref
+            ref = pdef.get("$ref") or pdef.get("items", {}).get("$ref")
+            if not ref:
+                continue
+            fp, tn = self._parse_ref(ref)
+            if fp is not None and tn and self._is_file_root_type(Path(fp).name, tn):
+                return True
+        return False
+
     def _is_node_type_tosca(self, tosca_type: str) -> bool:
         """Return True if *tosca_type* refers to a TOSCA node type rather than a data type.
 
@@ -1058,7 +1084,10 @@ class Converter:
           file-root node types in circular-import losers).
         - Local (unqualified) types are checked against ``_node_type_names``.
         - Namespaced types (``namespace:TypeName``) are checked against the
-          root definition of the corresponding external JSON Schema file.
+          root definition of the corresponding external JSON Schema file; if the
+          type is not the file root, also check whether its definition has any
+          properties that would become requirements (i.e. it would be classified
+          as a node type when the external file is independently converted).
         """
         if isinstance(tosca_type, CommentedOut):
             return True
@@ -1070,7 +1099,9 @@ class Converter:
             if tosca_file is None:
                 return False
             fname = Path(tosca_file).stem + ".json"
-            return self._is_file_root_type(fname, type_name)
+            if self._is_file_root_type(fname, type_name):
+                return True
+            return self._external_defn_has_node_props(fname, type_name)
         return tosca_type in self._node_type_names
 
     def _prop_to_requirement(
@@ -1680,6 +1711,23 @@ class Converter:
                 node_type["properties"] = plain_props
             node_type["requirements"] = requirements
             node_types[name] = node_type
+
+        # Post-processing: data types whose derived_from resolves to a node type
+        # must also be node types (TOSCA does not allow a data type to derive from
+        # a node type).  This covers cases like Redundancy.yaml's RedundantGroup
+        # which derives from rdndncy:RedundantGroup (a node type in v1_7_0.yaml).
+        for name in list(data_types):
+            derived_from = data_types[name].get("derived_from", "")
+            if derived_from and self._is_node_type_tosca(derived_from):
+                dtype = data_types.pop(name)
+                node_type = dict(dtype)
+                self._imports["core"] = "Core.yaml"
+                if "capabilities" not in node_type:
+                    node_type["capabilities"] = {
+                        "feature": {"type": "core:Feature"},
+                        "containable": {"type": "core:Containable"},
+                    }
+                node_types[name] = node_type
 
         # Post-processing: remove property redefinitions in derived types that
         # would relax a required:true constraint set by an ancestor.  TOSCA
