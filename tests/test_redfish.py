@@ -257,6 +257,7 @@ def test_links_property_expanded_to_requirements():
     # RelatedThing must appear as a DependsOn requirement using the custom relationship type
     reqs = {k: v for req in widget.get("requirements", []) for k, v in req.items()}
     assert "RelatedThing" in reqs
+    assert reqs["RelatedThing"]["node"] == "Thing"
     assert reqs["RelatedThing"]["relationship"] == "WidgetDependsOn"
     # Links type must not remain in output
     assert "Links" not in result.data_types

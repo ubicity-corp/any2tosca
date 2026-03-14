@@ -1175,6 +1175,7 @@ class Converter:
         self._imports["core"] = "Core.yaml"
         cap_ref = self._requirement_capability_for(node_type, "Containable")
         req: dict[str, Any] = {
+            "node": node_type,
             "capability": cap_ref,
             "relationship": "core:Contains",
             "count_range": count_range,
@@ -1268,6 +1269,7 @@ class Converter:
         for safe_name, node_type, count_range, description in pending:
             cap_ref = self._requirement_capability_for(node_type, "Feature")
             req: dict[str, Any] = {
+                "node": node_type,
                 "capability": cap_ref,
                 "relationship": relationship,
                 "count_range": count_range,
