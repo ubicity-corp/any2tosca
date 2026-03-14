@@ -98,7 +98,8 @@ pattern is flattened:
 ```
 
 The outer schema's other keywords (e.g. `description`) are merged into the
-result. This flattening is applied recursively throughout all property schemas.
+result. This flattening is applied recursively throughout all property schemas,
+including inside `items` schemas of array-typed properties.
 
 ---
 
@@ -116,10 +117,20 @@ types in the following ways:
 
 - Properties that reference other node types are emitted as TOSCA
   `requirements` rather than plain properties (see §2.3 and §2.4).
-- A `capabilities.feature: {type: core:Feature}` capability is added so the
-  node type can be targeted by `core:DependsOn` requirements.
-- A `capabilities.containable: {type: core:Containable}` capability is added
-  so the node type can be a target of `core:Contains` requirements.
+- A `capabilities.feature: {type: {caps_ns}:{TypeName}Feature}` capability is
+  added so the node type can be targeted by `core:DependsOn` requirements.
+- A `capabilities.containable: {type: {caps_ns}:{TypeName}Containable}`
+  capability is added so the node type can be a target of `core:Contains`
+  requirements.
+
+The `{TypeName}Feature` and `{TypeName}Containable` capability types are
+defined in a companion **`{BaseName}_caps.yaml`** file that only imports
+`Core.yaml`. This companion file is written alongside the main TOSCA output
+file. Requirements that target a node type import only the small caps file
+rather than the full resource file, which avoids circular TOSCA imports through
+capability/requirement chains. All versioned schemas for the same resource
+(e.g. `Drive.v1_13_0.json`, `Drive.v1_14_0.json`) share the same
+`Drive_caps.yaml` file with identical capability type definitions.
 
 Any other definition in the same file that is later found to have
 node-type-referencing properties is also promoted to a node type during
@@ -182,7 +193,7 @@ Links:
 requirements:
   - Chassis:
       node: chassis:Chassis
-      capability: core:Feature
+      capability: chassiscaps:ChassisFeature   # from Chassis_caps.yaml
       relationship: DrivesDependsOn
       count_range: [0, 1]
 
@@ -299,8 +310,10 @@ After all definitions are converted, four passes clean up the output:
 
 ## Output structure
 
-Each Redfish input file produces one TOSCA 2.0 YAML file with the following
-top-level sections (only non-empty sections are written):
+Each Redfish input file produces **two** TOSCA 2.0 YAML files (only non-empty
+sections are written):
+
+### Main file (`ComputerSystem.yaml`)
 
 ```yaml
 tosca_definitions_version: tosca_2_0
@@ -309,6 +322,8 @@ description: Types generated from JSON Schema by any2tosca
 imports:
   - url: Core.yaml
     namespace: core
+  - url: ComputerSystem_caps.yaml
+    namespace: computersystemcaps
   - url: Resource.yaml
     namespace: resource
   # … one entry per referenced external schema
@@ -335,11 +350,32 @@ node_types:
     properties:    {…}
     requirements:  [{Chassis: …}, {ManagedBy: …}]
     capabilities:
-      feature:     {type: core:Feature}
-      containable: {type: core:Containable}
+      feature:     {type: computersystemcaps:ComputerSystemFeature}
+      containable: {type: computersystemcaps:ComputerSystemContainable}
     interfaces:
       Actions:     {type: ComputerSystemActions}
 ```
+
+### Companion caps file (`ComputerSystem_caps.yaml`)
+
+```yaml
+tosca_definitions_version: tosca_2_0
+description: Capability types generated from JSON Schema by any2tosca
+
+imports:
+  - url: Core.yaml
+    namespace: core
+
+capability_types:
+  ComputerSystemFeature:
+    derived_from: core:Feature
+  ComputerSystemContainable:
+    derived_from: core:Containable
+```
+
+Other TOSCA files that need to express a requirement targeting `ComputerSystem`
+import only `ComputerSystem_caps.yaml` (not the full `ComputerSystem.yaml`),
+which prevents circular TOSCA imports through requirement/capability chains.
 
 ---
 
