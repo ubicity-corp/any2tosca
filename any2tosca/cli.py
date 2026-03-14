@@ -8,13 +8,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any
 
 import yaml
 
-from .converter import ConversionResult, Converter, build_tosca_document, convert_schema
+from .converter import ConversionResult, Converter, build_caps_document, build_tosca_document, convert_schema
 from .openapi import OpenAPIExtractor
 from .redfish import RedfishNormalizer
 from .yang import YANGNormalizer
@@ -97,7 +98,7 @@ def _report(result: ConversionResult, verbose: bool, path: Path) -> None:
 
 
 def _write_file(result: ConversionResult, input_path: Path, out_dir: Path) -> Path:
-    """Write a single ConversionResult to <out_dir>/<input_stem>.tosca.yaml."""
+    """Write a single ConversionResult to <out_dir>/<input_stem>.yaml (and companion _caps.yaml)."""
     tosca_doc = build_tosca_document(
         result.data_types,
         result.node_types,
@@ -107,6 +108,15 @@ def _write_file(result: ConversionResult, input_path: Path, out_dir: Path) -> Pa
     )
     out_path = out_dir / input_path.with_suffix(".yaml").name
     out_path.write_text(dump_tosca_yaml(tosca_doc), encoding="utf-8")
+
+    if result.capability_types:
+        stem = input_path.stem
+        # Strip version suffix (e.g. .v1_14_0) to get the base name
+        base = re.sub(r"[._]v\d+(?:[._]\d+)*$", "", stem) or stem
+        caps_path = out_dir / f"{base}_caps.yaml"
+        caps_doc = build_caps_document(result.capability_types)
+        caps_path.write_text(dump_tosca_yaml(caps_doc), encoding="utf-8")
+
     return out_path
 
 

@@ -258,13 +258,15 @@ def test_links_property_expanded_to_requirements():
     reqs = {k: v for req in widget.get("requirements", []) for k, v in req.items()}
     assert "RelatedThing" in reqs
     assert reqs["RelatedThing"]["relationship"] == "WidgetDependsOn"
-    assert reqs["RelatedThing"]["capability"] == "core:Feature"
     # Links type must not remain in output
     assert "Links" not in result.data_types
     assert "Links" not in result.node_types
-    # All node types must expose a core:Feature capability
-    assert widget.get("capabilities", {}).get("feature", {}).get("type") == "core:Feature"
-    assert result.node_types["Thing"].get("capabilities", {}).get("feature", {}).get("type") == "core:Feature"
+    # All node types must expose a type-specific Feature capability
+    assert widget.get("capabilities", {}).get("feature", {}).get("type") == "caps:WidgetFeature"
+    assert result.node_types["Thing"].get("capabilities", {}).get("feature", {}).get("type") == "caps:ThingFeature"
+    # Corresponding capability types must be in the result
+    assert "WidgetFeature" in result.capability_types
+    assert "ThingFeature" in result.capability_types
     # A WidgetDependsOn relationship type must be defined with the Oem property
     assert "WidgetDependsOn" in result.relationship_types
     wdo = result.relationship_types["WidgetDependsOn"]

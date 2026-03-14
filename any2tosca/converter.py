@@ -17,7 +17,7 @@ from referencing.jsonschema import DRAFT7
 
 from .yaml_utils import CommentedOut, FoldedStr
 
-__all__ = ["Converter", "ConversionResult", "convert_schema", "build_tosca_document"]
+__all__ = ["Converter", "ConversionResult", "convert_schema", "build_tosca_document", "build_caps_document"]
 
 
 class ConversionResult(NamedTuple):
@@ -27,6 +27,7 @@ class ConversionResult(NamedTuple):
     imports: dict[str, str] = {}           # namespace → tosca_file
     relationship_types: dict[str, Any] = {}  # name → TOSCA relationship type dict
     interface_types: dict[str, Any] = {}   # name → TOSCA interface type dict
+    capability_types: dict[str, Any] = {}  # name → TOSCA capability type dict (for companion caps file)
 
 
 class Converter:
@@ -75,6 +76,8 @@ class Converter:
         self._expanded_link_types: set[str] = set()          # types expanded from Links props
         self._relationship_types: dict[str, Any] = {}        # name → relationship type dict
         self._interface_types: dict[str, Any] = {}           # name → TOSCA interface type dict
+        self._capability_types: dict[str, Any] = {}          # name → TOSCA capability type dict
+        self._type_to_caps: dict[str, tuple[str, str]] = {}  # bare_type_name → (caps_ns, caps_file)
         self._node_type_names: set[str] = set() # names that are node types in this file
 
     def _all_dirs(self) -> list[Path]:
@@ -204,6 +207,54 @@ class Converter:
         """Derive the expected TOSCA output filename for a JSON Schema file."""
         return Path(file_part).stem + ".yaml"
 
+    def _caps_file_for(self, file_ref: str) -> str:
+        """Derive the companion capability-types YAML filename for a schema or TOSCA file.
+
+        Strips any version suffix from the stem and appends ``_caps.yaml``.
+        Works with both JSON schema names (``Drive.v1_14_0.json``) and TOSCA
+        output names (``Drive.v1_14_0.yaml``) — all versions of the same
+        resource family share the same capability-types file (``Drive_caps.yaml``).
+        """
+        stem = Path(file_ref).stem
+        base = re.sub(r"[._]v\d+(?:[._]\d+)*$", "", stem) or stem
+        return f"{base}_caps.yaml"
+
+    def _requirement_capability_for(self, tosca_type: Any, kind: str) -> str:
+        """Return a TOSCA capability-type reference for a requirement on *tosca_type*.
+
+        *kind* is ``"Feature"`` (for ``core:DependsOn``-style requirements) or
+        ``"Containable"`` (for ``core:Contains``-style requirements).
+
+        For a namespaced type (``namespace:TypeName``) the corresponding caps
+        file is derived from the imported YAML filename and the caps import is
+        recorded in ``_imports``.  For bare (unqualified) type names the
+        ``_type_to_caps`` lookup is used (populated by :meth:`_mark_no_import`
+        for circular-import losers).  Falls back to ``core:{kind}`` when the
+        source file cannot be determined.
+        """
+        type_str = str(tosca_type) if isinstance(tosca_type, CommentedOut) else tosca_type
+        if ":" in type_str:
+            namespace, type_name = type_str.split(":", 1)
+            tosca_file = self._imports.get(namespace)
+            if tosca_file:
+                caps_file = self._caps_file_for(tosca_file)
+                caps_ns = self._namespace_for(caps_file)
+                self._imports[caps_ns] = caps_file
+                return f"{caps_ns}:{type_name}{kind}"
+        else:
+            # Bare type name — look up caps recorded when the file was marked no-import.
+            if type_str in self._type_to_caps:
+                caps_ns, caps_file = self._type_to_caps[type_str]
+                self._imports[caps_ns] = caps_file
+                return f"{caps_ns}:{type_str}{kind}"
+            # Local type defined in the current file — use the current file's caps.
+            if self._current_filename:
+                caps_file = self._caps_file_for(self._current_filename)
+                caps_ns = self._namespace_for(caps_file)
+                self._imports[caps_ns] = caps_file
+                return f"{caps_ns}:{type_str}{kind}"
+        return f"core:{kind}"
+
     def _load_cached_doc(self, fname: str) -> dict[str, Any] | None:
         """Find *fname* in the schema search dirs, read it (using ``_file_cache``), and parse JSON.
 
@@ -247,7 +298,13 @@ class Converter:
             return
         top_ref = doc.get("$ref", "")
         if top_ref.startswith("#/definitions/"):
-            self._node_type_names.add(self.sanitize_name(top_ref.split("/")[-1]))
+            safe_name = self.sanitize_name(top_ref.split("/")[-1])
+            self._node_type_names.add(safe_name)
+            # Record the caps file for this type so _requirement_capability_for can
+            # use it even when the file is marked no-import (bare type names).
+            caps_file = self._caps_file_for(fname)
+            caps_ns = self._namespace_for(caps_file)
+            self._type_to_caps[safe_name] = (caps_ns, caps_file)
 
     def _collect_no_import_files(self, root_schema: dict[str, Any]) -> None:
         """
@@ -1116,9 +1173,9 @@ class Converter:
             return None
 
         self._imports["core"] = "Core.yaml"
+        cap_ref = self._requirement_capability_for(node_type, "Containable")
         req: dict[str, Any] = {
-            "node": node_type,
-            "capability": "core:Containable",
+            "capability": cap_ref,
             "relationship": "core:Contains",
             "count_range": count_range,
         }
@@ -1209,9 +1266,9 @@ class Converter:
 
         requirements: list[dict[str, Any]] = []
         for safe_name, node_type, count_range, description in pending:
+            cap_ref = self._requirement_capability_for(node_type, "Feature")
             req: dict[str, Any] = {
-                "node": node_type,
-                "capability": "core:Feature",
+                "capability": cap_ref,
                 "relationship": relationship,
                 "count_range": count_range,
             }
@@ -1703,11 +1760,16 @@ class Converter:
             else:
                 tosca_type["properties"] = all_props
 
-        # All node types expose a core:Feature capability so they can be targeted
-        # by core:DependsOn requirements (e.g. from the Redfish Links pattern).
+        # All node types expose a type-specific Feature capability so they can be
+        # targeted by DependsOn requirements via the companion caps file.
         if is_node_type:
             self._imports["core"] = "Core.yaml"
-            tosca_type["capabilities"] = {"feature": {"type": "core:Feature"}}
+            feat_name = f"{type_name}Feature"
+            self._capability_types.setdefault(feat_name, {"derived_from": "core:Feature"})
+            caps_file = self._caps_file_for(self._current_filename) if self._current_filename else "caps.yaml"
+            caps_ns = self._namespace_for(caps_file)
+            self._imports[caps_ns] = caps_file
+            tosca_type["capabilities"] = {"feature": {"type": f"{caps_ns}:{feat_name}"}}
 
         # Non-object named types (e.g. a string with enum constraints) — data types only
         if not is_node_type:
@@ -1794,6 +1856,8 @@ class Converter:
         self._expanded_link_types = set()
         self._relationship_types = {}
         self._interface_types = {}
+        self._capability_types = {}
+        self._type_to_caps = {}
         self._transitive_back_cache = {}
         self._back_import_cache = {}
         self._current_filename = (
@@ -1855,9 +1919,16 @@ class Converter:
                 node_type = dict(dtype)
                 self._imports["core"] = "Core.yaml"
                 if "capabilities" not in node_type:
+                    caps_file = self._caps_file_for(self._current_filename) if self._current_filename else "caps.yaml"
+                    caps_ns = self._namespace_for(caps_file)
+                    self._imports[caps_ns] = caps_file
+                    feat_name = f"{name}Feature"
+                    cont_name = f"{name}Containable"
+                    self._capability_types.setdefault(feat_name, {"derived_from": "core:Feature"})
+                    self._capability_types.setdefault(cont_name, {"derived_from": "core:Containable"})
                     node_type["capabilities"] = {
-                        "feature": {"type": "core:Feature"},
-                        "containable": {"type": "core:Containable"},
+                        "feature": {"type": f"{caps_ns}:{feat_name}"},
+                        "containable": {"type": f"{caps_ns}:{cont_name}"},
                     }
                 node_types[name] = node_type
 
@@ -1901,11 +1972,16 @@ class Converter:
             node_types.pop(name, None)
 
         # Every node type can be the target of a core:Contains requirement,
-        # so add the core:Containable capability to all of them.
+        # so add a type-specific Containable capability to all of them.
         if node_types:
             self._imports["core"] = "Core.yaml"
-            for nt in node_types.values():
-                nt.setdefault("capabilities", {})["containable"] = {"type": "core:Containable"}
+            caps_file = self._caps_file_for(self._current_filename) if self._current_filename else "caps.yaml"
+            caps_ns = self._namespace_for(caps_file)
+            self._imports[caps_ns] = caps_file
+            for nt_name, nt in node_types.items():
+                cont_name = f"{nt_name}Containable"
+                self._capability_types.setdefault(cont_name, {"derived_from": "core:Containable"})
+                nt.setdefault("capabilities", {})["containable"] = {"type": f"{caps_ns}:{cont_name}"}
 
         return ConversionResult(
             data_types=data_types,
@@ -1913,6 +1989,7 @@ class Converter:
             imports=dict(self._imports),
             relationship_types=dict(self._relationship_types),
             interface_types=dict(self._interface_types),
+            capability_types=dict(self._capability_types),
         )
 
     def build_tosca_document(
@@ -1965,3 +2042,13 @@ def build_tosca_document(
     return Converter().build_tosca_document(
         data_types, node_types, relationship_types, interface_types, imports
     )
+
+
+def build_caps_document(capability_types: dict[str, Any]) -> dict[str, Any]:
+    """Build a TOSCA document containing only capability type definitions."""
+    return {
+        "tosca_definitions_version": "tosca_2_0",
+        "description": FoldedStr("Capability types generated from JSON Schema by any2tosca"),
+        "imports": [{"url": "Core.yaml", "namespace": "core"}],
+        "capability_types": capability_types,
+    }
