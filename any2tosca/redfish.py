@@ -163,8 +163,11 @@ class RedfishNormalizer:
         # Drop x-* extensions
         schema = {k: v for k, v in schema.items() if not k.startswith("x-")}
 
-        # Recurse into nested properties
+        # Recurse into nested properties and array items
         if "properties" in schema:
             schema["properties"] = self._normalize_properties(schema["properties"])
+
+        if "items" in schema:
+            schema["items"] = self._normalize_property_schema(schema["items"])
 
         return schema

@@ -82,6 +82,41 @@ def test_anyof_null_flattened():
     assert capacity["type"] == "integer"
 
 
+def test_anyof_null_flattened_inside_array_items():
+    """anyOf/null flattening must also apply inside array items, not just top-level properties."""
+    schema = {
+        "$ref": "#/definitions/Container",
+        "definitions": {
+            "Container": {
+                "type": "object",
+                "properties": {
+                    "MountPoints": {
+                        "type": "array",
+                        "items": {
+                            "anyOf": [
+                                {"$ref": "#/definitions/MountPoint"},
+                                {"type": "null"},
+                            ]
+                        },
+                    },
+                },
+            },
+            "MountPoint": {"type": "object", "properties": {"Target": {"type": "string"}}},
+        },
+    }
+    root, node_type_names = n.normalize(schema)
+    items = root["definitions"]["Container"]["properties"]["MountPoints"]["items"]
+    assert "anyOf" not in items
+    assert items == {"$ref": "#/definitions/MountPoint"}
+
+    # End-to-end: entry_schema must resolve to MountPoint, not string
+    result = Converter().convert_schema(root, "Container", node_type_names)
+    mount_points = result.node_types["Container"].get("properties", {}).get("MountPoints") or \
+                   result.data_types.get("Container", {}).get("properties", {}).get("MountPoints")
+    assert mount_points is not None
+    assert mount_points.get("entry_schema", {}).get("type") == "MountPoint"
+
+
 # ── x- extension handling ─────────────────────────────────────────────────────
 
 def test_x_extensions_dropped():
