@@ -233,7 +233,6 @@ the operation name `Reset` (the segment after the last `.`).
 | Redfish source | TOSCA target |
 |---|---|
 | Action definition `description` / `x-longDescription` | Operation `description` |
-| Action definition `properties` (e.g. `target`, `title`) | Operation `metadata` (property name → property description) |
 | Action definition `parameters` | Operation `inputs` |
 | Parameter `$ref` | Input `type` (resolved via `_ref_to_tosca_type`; records import) |
 | Parameter `description` / `x-longDescription` | Input `description` |
@@ -248,9 +247,6 @@ interface_types:
     operations:
       Reset:
         description: This action resets the system.
-        metadata:
-          target: Link to invoke action
-          title: Friendly action name
         inputs:
           ResetType:
             type: resource:ResetType

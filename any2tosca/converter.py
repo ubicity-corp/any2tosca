@@ -1237,7 +1237,6 @@ class Converter:
 
         - ``description`` / ``x-longDescription`` → operation ``description``
         - ``parameters``                           → operation ``inputs``
-        - ``properties`` (e.g. ``target``, ``title``) → operation ``metadata``
 
         For each parameter:
 
@@ -1292,22 +1291,6 @@ class Converter:
             desc = action_def.get("description") or action_def.get("x-longDescription")
             if desc:
                 operation["description"] = FoldedStr(desc)
-
-            # properties (target, title, …) → metadata
-            props = action_def.get("properties", {})
-            if props:
-                metadata: dict[str, str] = {}
-                for prop_name, prop_schema in props.items():
-                    if not isinstance(prop_schema, dict):
-                        continue
-                    prop_desc = (
-                        prop_schema.get("description")
-                        or prop_schema.get("x-longDescription", "")
-                    )
-                    if prop_desc:
-                        metadata[prop_name] = prop_desc
-                if metadata:
-                    operation["metadata"] = metadata
 
             # parameters → inputs
             params = action_def.get("parameters", {})

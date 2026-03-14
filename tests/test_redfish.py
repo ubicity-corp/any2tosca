@@ -354,11 +354,6 @@ def test_actions_property_converted_to_interface_type():
     # description from action definition
     assert "resets the system" in reset_op.get("description", "")
 
-    # properties → metadata
-    metadata = reset_op.get("metadata", {})
-    assert "target" in metadata
-    assert "title" in metadata
-
     # parameters → inputs
     inputs = reset_op.get("inputs", {})
     assert "ResetType" in inputs
