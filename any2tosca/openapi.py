@@ -7,6 +7,10 @@ and identifies which schemas should become TOSCA node types.
 
 from __future__ import annotations
 
+__author__ = "Chris Lauwers"
+__copyright__ = "Copyright (c) 2022-2026, Ubicity Corp."
+__email__ = "info@ubicity.com"
+
 import copy
 from typing import Any
 

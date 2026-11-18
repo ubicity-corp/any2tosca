@@ -6,6 +6,10 @@ Pre-processor that normalizes Redfish JSON Schema for use with the Converter.
 
 from __future__ import annotations
 
+__author__ = "Chris Lauwers"
+__copyright__ = "Copyright (c) 2022-2026, Ubicity Corp."
+__email__ = "info@ubicity.com"
+
 import copy
 import re
 from typing import Any

@@ -9,6 +9,10 @@ Public API::
     from any2tosca.yaml_utils import dump_tosca_yaml
 """
 
+__author__ = "Chris Lauwers"
+__copyright__ = "Copyright (c) 2022-2026, Ubicity Corp."
+__email__ = "info@ubicity.com"
+
 from .converter import Converter, ConversionResult, build_tosca_document, convert_schema
 from .openapi import OpenAPIExtractor
 from .redfish import RedfishNormalizer

@@ -13,11 +13,7 @@ types (YAML).
 
 ## Installation
 
-```bash
-pip install any2tosca
-```
-
-Or install from source:
+From source (any2tosca is not yet on PyPI):
 
 ```bash
 git clone https://github.com/ubicity-corp/any2tosca
@@ -198,6 +194,13 @@ YANG integer types (`int8`–`int64`, `uint8`–`uint64`) map to TOSCA `integer`
 pytest
 ```
 
+## Contributing
+
+Report a problem or ask a question by opening an issue. Changes come as pull
+requests, with a test that pins what they fix and `pytest` passing. Report a
+security vulnerability privately, through the repository's Security tab,
+rather than in an issue.
+
 ## License
 
-MIT
+Apache License 2.0; see [LICENSE](LICENSE).

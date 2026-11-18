@@ -5,8 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Commands
 
 ```bash
-# Install in development mode (use the project venv)
-source env/bin/activate
+# Install in development mode, in an active virtual environment
 pip install -e ".[dev]"
 
 # Run all tests

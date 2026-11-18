@@ -6,6 +6,10 @@ Core logic for converting JSON Schema documents to TOSCA data types.
 
 from __future__ import annotations
 
+__author__ = "Chris Lauwers"
+__copyright__ = "Copyright (c) 2022-2026, Ubicity Corp."
+__email__ = "info@ubicity.com"
+
 import json
 import re
 import sys

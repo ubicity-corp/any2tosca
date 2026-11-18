@@ -6,6 +6,10 @@ Command-line entry points for any2tosca, redfish2tosca, and oas2tosca.
 
 from __future__ import annotations
 
+__author__ = "Chris Lauwers"
+__copyright__ = "Copyright (c) 2022-2026, Ubicity Corp."
+__email__ = "info@ubicity.com"
+
 import argparse
 import json
 import re
