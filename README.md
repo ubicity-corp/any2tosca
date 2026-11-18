@@ -70,15 +70,19 @@ data_types:
 
 ## Installation
 
-any2tosca needs Python 3.10 or later and is installed from a checkout:
+any2tosca needs Python 3.10 or later:
+
+```bash
+pip install any2tosca
+```
+
+For development, install from a checkout with the test tools:
 
 ```bash
 git clone https://github.com/ubicity-corp/any2tosca
 cd any2tosca
-pip install .
+pip install -e ".[dev]"
 ```
-
-For development, with the test tools, use `pip install -e ".[dev]"` instead.
 
 ## Usage
 
