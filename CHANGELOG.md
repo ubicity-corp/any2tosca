@@ -63,6 +63,9 @@ What changed in each release, and what to do about it.
   capabilities, requirements, `_caps.yaml` files or a `Core.yaml` import, and
   data types holding a node type's schema stay data types. Pass
   `--relationship-model links` for the previous output.
+- **Fixed:** an `allOf`, `anyOf` or `oneOf` written inline in a property, which
+  adds properties to a `$ref` (or merges several `$ref`s), lost that parent: the
+  inline data type now derives from it.
 - **Fixed:** OpenAPI schema names containing dots (such as
   `io.k8s.api.apps.v1.Deployment`) produced no node types. They now do.
 

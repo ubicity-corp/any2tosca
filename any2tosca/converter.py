@@ -1611,12 +1611,16 @@ class Converter:
         data_types: dict[str, Any],
     ) -> dict[str, Any]:
         """Implementation of :meth:`schema_to_property`, without extension metadata."""
+        # The type an inline allOf / anyOf / oneOf derives from, if any.
+        parent_type: str | None = None
         # allOf / anyOf / oneOf → merge sub-schemas first
         if any(k in prop_schema for k in ("allOf", "anyOf", "oneOf")):
             prop_schema, allof_type = self._merge_allof(prop_schema, root_schema)
             if allof_type and not prop_schema.get("properties"):
                 return self._build_simple_prop_def(allof_type, prop_schema, prop_name, required_props)
-            # otherwise fall through with the merged schema
+            # otherwise fall through with the merged schema, which holds the
+            # properties added to allof_type: the inline type derives from it
+            parent_type = allof_type
 
         # $ref → use the referenced TOSCA data type name directly
         if "$ref" in prop_schema:
@@ -1762,9 +1766,14 @@ class Converter:
             nested_type_name = self.sanitize_name(prop_name)
             if nested_type_name not in data_types:
                 data_types[nested_type_name] = {}  # sentinel: breaks recursive cycles
-                data_types[nested_type_name] = self.schema_to_tosca_data_type(
+                nested = self.schema_to_tosca_data_type(
                     nested_type_name, prop_schema, root_schema, data_types
                 )
+                if parent_type and "derived_from" not in nested:
+                    head = {k: nested[k] for k in ("description",) if k in nested}
+                    nested = head | {"derived_from": parent_type} | {
+                        k: v for k, v in nested.items() if k not in head}
+                data_types[nested_type_name] = nested
             return self._build_simple_prop_def(nested_type_name, prop_schema, prop_name, required_props)
 
         # Primitive type — also carries validation and entry_schema

@@ -387,8 +387,7 @@ YANG integer types (`int8`–`int64`, `uint8`–`uint64`) map to TOSCA `integer`
   The values they constrain are converted; the constraints they add are not.
   `readOnly` is converted on node types only.
 - **Unions:** an `anyOf` / `oneOf` of several `$ref`s becomes one type, so the
-  choice between the alternatives is lost. Written inline in a property, the
-  type also loses the first alternative's properties.
+  choice between the alternatives is lost.
 - **Kubernetes `IntOrString`:** TOSCA has no union type, so `IntOrString`
   fields are strings and do not take an integer value.
 

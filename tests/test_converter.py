@@ -1200,3 +1200,37 @@ def test_untyped_definition_with_structure_is_not_a_string():
     }}
     types = Converter().convert_schema(root, "x").data_types
     assert all(types[n].get("derived_from") != "string" for n in ("Arr", "Map", "Obj", "Alias") if n in types)
+
+
+# ── Inline anyOf / allOf keep their parent ────────────────────────────────────
+
+def _obj_props(**props):
+    return {"type": "object", "properties": {k: {"type": v} for k, v in props.items()}}
+
+
+_UNION_DEFS = {"A": _obj_props(a="string"), "B": _obj_props(b="string"), "C": _obj_props(c="string")}
+
+
+def test_inline_anyof_of_several_refs_derives_from_the_first():
+    root = {"definitions": {**_UNION_DEFS, "T": {"type": "object", "properties": {
+        "either": {"anyOf": [{"$ref": f"#/definitions/{n}"} for n in "ABC"]}}}}}
+    types = Converter().convert_schema(root, "x").data_types
+    assert types["T"]["properties"]["either"]["type"] == "either"
+    assert types["either"]["derived_from"] == "A"
+    assert set(types["either"]["properties"]) == {"b", "c"}
+
+
+def test_inline_allof_with_extra_properties_derives_from_the_ref():
+    root = {"definitions": {**_UNION_DEFS, "T": {"type": "object", "properties": {
+        "extended": {"allOf": [{"$ref": "#/definitions/A"}], "properties": {"x": {"type": "string"}}}}}}}
+    types = Converter().convert_schema(root, "x").data_types
+    assert types["extended"]["derived_from"] == "A"
+    assert set(types["extended"]["properties"]) == {"x"}
+
+
+def test_named_anyof_of_several_refs_is_unchanged():
+    root = {"definitions": {**_UNION_DEFS, "U": {"anyOf": [{"$ref": "#/definitions/A"},
+                                                           {"$ref": "#/definitions/B"}]}}}
+    u = Converter().convert_schema(root, "x").data_types["U"]
+    assert u["derived_from"] == "A"
+    assert set(u["properties"]) == {"b"}
