@@ -205,7 +205,7 @@ input format:
 | `--split RULES.yaml` | Enable multi-output with the given split rules. |
 | `--merge-cycles` | Merge each import cycle into one unit instead of failing. |
 | `--allow-skipped-refs` | Warn instead of failing on references to skipped definitions. |
-| `--profile NAME:VERSION` | Also write `profile.yaml` and `TOSCA.meta`. |
+| `--profile NAME:VERSION` | Also write `profile.yaml` and `TOSCA.meta` (for any run; see `docs/generalization.md`, D). |
 
 `--split` takes exactly one input file. The split is defined over one document's
 definitions, and splitting several inputs into the same set of units would mix

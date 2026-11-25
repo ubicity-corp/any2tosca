@@ -104,6 +104,7 @@ yang2tosca server.yang -o tosca/
 | `-v`, `--verbose` | list the types as they are converted |
 | `--extension-metadata KEY` | copy schema key `KEY` (typically a vendor extension, `x-...`) into the `metadata` of the type or property it appears on; repeatable |
 | `--relationship-model links\|value` | how references to node types are converted (see [What it generates](#what-it-generates)); the default is `value` for `oas2tosca` and `links` for the others |
+| `--profile NAME:VERSION` | also write `profile.yaml`, importing every file the run writes in dependency order, and `TOSCA.meta`, so the output directory is a profile; a warning names any imported file the run did not write (such as `Core.yaml`) |
 
 A schema that references another file becomes a TOSCA file that imports the
 other one's output, by `url` and with a `namespace`. Referenced files are
@@ -143,7 +144,6 @@ oas2tosca api.json --split rules.yaml --profile io.example:1.0 -o profile/
 | `--split RULES` | split the input using the rules in `RULES`; takes exactly one input file |
 | `--merge-cycles` | merge files that would import each other in a cycle, instead of failing |
 | `--allow-skipped-refs` | warn, instead of failing, when a converted type references a skipped schema |
-| `--profile NAME:VERSION` | also write `profile.yaml`, importing every file, and `TOSCA.meta` |
 
 Two schemas that get the same type name in one file, and files that import each
 other in a cycle, are errors. See [docs/multi-output.md](docs/multi-output.md).

@@ -292,11 +292,55 @@ def test_cli_split_takes_one_input(tmp_path, capsys):
     assert "exactly one input" in capsys.readouterr().err
 
 
-def test_cli_profile_requires_split(tmp_path, capsys):
-    schema = tmp_path / "s.json"
-    schema.write_text(json.dumps({"type": "object", "properties": {}}))
-    assert main_json([str(schema), "--profile", "io.x:1.0", "-o", str(tmp_path / "o")]) == 1
-    assert "--profile requires --split" in capsys.readouterr().err
+# ── --profile without --split ─────────────────────────────────────────────────
+
+def _write_schemas(tmp_path, schemas):
+    src = tmp_path / "src"
+    src.mkdir()
+    for name, schema in schemas.items():
+        (src / name).write_text(json.dumps(schema))
+    return src
+
+
+def test_profile_for_a_multi_file_run_imports_in_dependency_order(tmp_path):
+    src = _write_schemas(tmp_path, {
+        "a.json": {"title": "A", "type": "object",
+                   "properties": {"b": {"$ref": "b.json"}}},
+        "b.json": {"title": "B", "type": "object", "properties": {"x": {"type": "string"}}},
+    })
+    out = tmp_path / "out"
+    assert main_json([str(src), "--profile", "io.x:1.0", "-o", str(out)]) == 0
+    profile = yaml.safe_load((out / "profile.yaml").read_text())
+    assert profile["profile"] == "io.x:1.0"
+    assert profile["imports"] == ["b.yaml", "a.yaml"]
+    assert "Entry-Definitions: profile.yaml" in (out / "TOSCA.meta").read_text()
+
+
+def test_profile_for_a_single_file(tmp_path):
+    src = _write_schemas(tmp_path, {"s.json": {"title": "S", "type": "object", "properties": {}}})
+    out = tmp_path / "out"
+    assert main_json([str(src / "s.json"), "--profile", "io.x:1.0", "-o", str(out)]) == 0
+    assert yaml.safe_load((out / "profile.yaml").read_text())["imports"] == ["s.yaml"]
+
+
+def test_profile_warns_about_imports_the_run_did_not_write(tmp_path, capsys):
+    from any2tosca.cli import main_redfish
+    src = _write_schemas(tmp_path, {
+        "Fan.json": {"$ref": "#/definitions/Fan", "definitions": {"Fan": {
+            "type": "object", "properties": {"Speed": {"type": "integer"}}}}},
+    })
+    out = tmp_path / "out"
+    assert main_redfish([str(src), "--profile", "org.dmtf:1.0", "-o", str(out)]) == 0
+    assert yaml.safe_load((out / "profile.yaml").read_text())["imports"] == ["Fan.yaml"]
+    err = capsys.readouterr().err
+    assert "Core.yaml" in err                 # supplied by the user under the links model
+    assert "Fan_caps.yaml" not in err         # written by this run
+
+
+def test_profile_takes_name_and_version(tmp_path, capsys):
+    src = _write_schemas(tmp_path, {"s.json": {"title": "S", "type": "object", "properties": {}}})
+    assert main_json([str(src), "--profile", "io.x", "-o", str(tmp_path / "o")]) == 1
+    assert "NAME:VERSION" in capsys.readouterr().err
 
 
 def test_property_named_dollar_ref_is_kept():

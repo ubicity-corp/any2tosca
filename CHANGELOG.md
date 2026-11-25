@@ -5,9 +5,12 @@ What changed in each release, and what to do about it.
 ## Unreleased
 
 - **Several TOSCA files from one input.** `--split RULES` divides the schemas of
-  one input file among several TOSCA files by name, with imports between them;
-  `--profile NAME:VERSION` also writes `profile.yaml` and `TOSCA.meta`. Available
-  on all four commands. Output without these options is unchanged.
+  one input file among several TOSCA files by name, with imports between them.
+  Available on all four commands. Output without the option is unchanged.
+- **Output as a profile.** `--profile NAME:VERSION` also writes `profile.yaml`,
+  importing every file the run writes in dependency order, and `TOSCA.meta`,
+  for any run: a split, a directory of schemas, or a single file. A warning
+  names imported files the run did not write.
 - **Relationship model.** `--relationship-model links|value` chooses how
   references to node types are converted. `links` is the existing behaviour:
   requirements, `feature` and `containable` capabilities, `<name>_caps.yaml`

@@ -82,7 +82,7 @@ def _make_parser(
         help="Copy schema key KEY (typically a vendor extension, x-...) into the TOSCA "
              "metadata of the type or property it appears on; repeatable.",
     )
-    split = parser.add_argument_group("multi-output (one input, several TOSCA files)")
+    split = parser.add_argument_group("multi-output (several TOSCA files, packaged as a profile)")
     split.add_argument(
         "--split",
         metavar="RULES",
@@ -102,8 +102,8 @@ def _make_parser(
     split.add_argument(
         "--profile",
         metavar="NAME:VERSION",
-        help="Also write profile.yaml and TOSCA.meta, packaging the files as profile "
-             "NAME:VERSION. Requires --split.",
+        help="Also write profile.yaml, importing every file written, and TOSCA.meta, "
+             "packaging the output directory as profile NAME:VERSION.",
     )
     return parser
 
@@ -132,8 +132,6 @@ def _conventions(fmt: InputFormat, args: argparse.Namespace) -> Conventions:
 
 def _split_args_error(args: argparse.Namespace, input_files: list[Path]) -> str | None:
     """Return an error message if the multi-output options are used incorrectly."""
-    if args.profile and not args.split:
-        return "--profile requires --split."
     if args.profile and ":" not in args.profile:
         return f"--profile takes NAME:VERSION, not '{args.profile}'."
     if (args.merge_cycles or args.allow_skipped_refs) and not args.split:
@@ -235,6 +233,33 @@ def _write_profile(names: list[str], profile: str, out_dir: Path) -> None:
     )
 
 
+def _import_order(written: dict[str, list[str]]) -> list[str]:
+    """The written files, each after the written files it imports.
+
+    *written* maps each written file to the files it imports, in the order the
+    files were written; that order breaks ties.  Imports of files the run did
+    not write do not constrain the order.
+    """
+    deps = {f: {i for i in imports if i in written and i != f} for f, imports in written.items()}
+    ordered: list[str] = []
+    done: set[str] = set()
+    while len(ordered) < len(written):
+        ready = [f for f in written if f not in done and deps[f] <= done]
+        if not ready:
+            # A cycle (the converter avoids them): keep the written order for the rest.
+            ready = [f for f in written if f not in done]
+        ordered.extend(ready)
+        done.update(ready)
+    return ordered
+
+
+def _missing_imports(written: dict[str, list[str]], out_dir: Path) -> list[str]:
+    """Files the written files import that this run did not write and are not in *out_dir*."""
+    produced = set(written)
+    return sorted({i for imports in written.values() for i in imports
+                   if i not in produced and not (out_dir / i).exists()})
+
+
 def _run_split(
     normalized: Normalized,
     conventions: Conventions,
@@ -313,6 +338,7 @@ def run(fmt: InputFormat, args: argparse.Namespace) -> int:
     converter = Converter()
     search_paths = [Path(d) for d in args.include_dir]
     written = errors = 0
+    profile_files: dict[str, list[str]] = {}   # written file → files it imports
 
     for path in input_files:
         normalized = _load_and_normalize(fmt, path)
@@ -337,10 +363,18 @@ def run(fmt: InputFormat, args: argparse.Namespace) -> int:
         out_path = _write_file(result, path.stem, out_dir)
         print(f"  → {out_path}")
         written += 1
+        profile_files[out_path.name] = list(result.imports.values())
 
     if written == 0:
         print("No TOSCA files were written.", file=sys.stderr)
         return 1
+    if args.profile:
+        _write_profile(_import_order(profile_files), args.profile, out_dir)
+        print(f"  → {out_dir / 'profile.yaml'}")
+        missing = _missing_imports(profile_files, out_dir)
+        if missing:
+            print("Warning: the profile imports files this run did not write; "
+                  f"provide them beside profile.yaml: {', '.join(missing)}", file=sys.stderr)
     print(f"\n✅  {written} file(s) written to: {out_dir}/")
     if errors:
         print(f"⚠   {errors} file(s) had errors and were skipped.", file=sys.stderr)

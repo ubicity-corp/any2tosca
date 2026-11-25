@@ -1,7 +1,7 @@
 # One Pipeline, Format Rules Where Needed
 
-**Status:** Review and proposal (2026-11-25). A, B and C are implemented; D and E
-are open.
+**Status:** Review and proposal (2026-11-25). A, B, C and D are implemented; E is
+open.
 
 `any2tosca` converts JSON Schema to TOSCA, and treats OpenAPI, Redfish, YANG and
 the Kubernetes specification as JSON Schema with extra rules. This document
@@ -144,6 +144,9 @@ option is given.
 `--profile NAME:VERSION` writes `profile.yaml` and `TOSCA.meta` for whatever the
 run writes: the units of a split, or the files of a multi-file run, imported in
 dependency order (from each file's imports). It no longer requires `--split`.
+Capability files reach the profile through the files that import them. A
+warning names every imported file the run did not write, such as the
+user-supplied `Core.yaml`, since the profile is complete only with it.
 
 ### E. Plain JSON Schema and YANG default to `value` (decision)
 
