@@ -13,6 +13,7 @@ __email__ = "info@ubicity.com"
 import json
 import re
 import sys
+from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -83,6 +84,10 @@ class Converter:
         self._capability_types: dict[str, Any] = {}          # name → TOSCA capability type dict
         self._type_to_caps: dict[str, tuple[str, str]] = {}  # bare_type_name → (caps_ns, caps_file)
         self._node_type_names: set[str] = set() # names that are node types in this file
+        # In-memory schema set (persist across convert_schema calls until replaced)
+        self._documents: dict[str, dict[str, Any]] = {}       # filename → parsed schema
+        self._namespaces: dict[str, str] = {}                 # filename → namespace override
+        self._node_types_by_file: dict[str, frozenset[str]] = {}  # filename → node-type names
 
     def _all_dirs(self) -> list[Path]:
         """All directories to search for schema files, base path first."""
@@ -95,6 +100,10 @@ class Converter:
     def _resolve_fname(self, fname: str) -> "Path | None":
         """Resolve *fname* to an absolute Path, caching the result."""
         if fname in self._fname_to_path:
+            return self._fname_to_path[fname]
+        if fname in self._documents:
+            # In-memory document: a placeholder path, never read from disk.
+            self._fname_to_path[fname] = Path("<memory>") / fname
             return self._fname_to_path[fname]
         candidate = next(
             (d / fname for d in self._all_dirs() if (d / fname).exists()), None
@@ -169,7 +178,8 @@ class Converter:
     def _namespace_for(self, file_part: str) -> str:
         """
         Derive a short TOSCA namespace identifier (≤8 chars, lowercase) from
-        a JSON Schema filename.
+        a JSON Schema filename.  A namespace given for the filename in the
+        ``namespaces`` argument of :meth:`convert_schema` takes precedence.
 
         Strategy:
         1. Strip version suffix (e.g. ``.v1_0_0``).
@@ -178,6 +188,9 @@ class Converter:
         4. Otherwise contract each word by removing non-leading vowels.
         5. If still >8 chars, distribute 8 chars proportionally across words.
         """
+        override = self._namespaces.get(Path(file_part).name)
+        if override:
+            return override
         stem = Path(file_part).stem
         base = re.sub(r"[._]v\d+(?:[._]\d+)*$", "", stem) or stem
 
@@ -267,6 +280,8 @@ class Converter:
         ``_file_cache`` so that text-search callers (e.g.
         :meth:`_refs_back_to_current`) can reuse the cached content.
         """
+        if fname in self._documents:
+            return self._documents[fname]
         candidate = self._resolve_fname(fname)
         if candidate is None:
             return None
@@ -580,7 +595,7 @@ class Converter:
                     return {}
             return node if isinstance(node, dict) else {}
 
-        if self._base_path is None:
+        if self._base_path is None and not self._documents:
             return {}
 
         # Fast path: load file via cache, then navigate to the fragment.
@@ -1143,6 +1158,8 @@ class Converter:
             if tosca_file is None:
                 return False
             fname = Path(tosca_file).stem + ".json"
+            if fname in self._node_types_by_file:
+                return type_name in self._node_types_by_file[fname]
             if self._is_file_root_type(fname, type_name):
                 return True
             return self._external_defn_has_node_props(fname, type_name)
@@ -1817,6 +1834,10 @@ class Converter:
         base_path: Path | None = None,
         search_paths: list[Path] | None = None,
         source_path: Path | None = None,
+        *,
+        documents: Mapping[str, dict[str, Any]] | None = None,
+        namespaces: Mapping[str, str] | None = None,
+        node_types_by_file: Mapping[str, Collection[str]] | None = None,
     ) -> ConversionResult:
         """
         Convert an entire JSON Schema document to TOSCA types.
@@ -1839,6 +1860,17 @@ class Converter:
             Path to the source schema file being converted.  Used to detect
             potential circular imports when the source file's filename cannot
             be inferred from the schema's ``$id`` (e.g. after normalization).
+        documents:
+            In-memory schema documents, by filename.  External ``$ref`` values
+            naming one of these files resolve against it, before the search
+            directories are consulted.
+        namespaces:
+            TOSCA namespace to use for an external file, by filename, instead
+            of the one derived from the filename.
+        node_types_by_file:
+            The names of the definitions that are node types, by filename.  A
+            reference into a listed file is a node-type reference exactly when
+            its type name is in that file's set.
 
         Returns
         -------
@@ -1846,7 +1878,9 @@ class Converter:
             Named tuple with ``data_types``, ``node_types``, and ``imports`` dicts.
         """
         new_search_paths = list(search_paths) if search_paths else []
-        if base_path != self._base_path or new_search_paths != self._search_paths:
+        new_documents = dict(documents) if documents else {}
+        if (base_path != self._base_path or new_search_paths != self._search_paths
+                or new_documents != self._documents):
             # Search dirs changed: invalidate all path-dependent caches.
             self._registry = None
             self._id_to_path = {}
@@ -1857,6 +1891,11 @@ class Converter:
             self._reachable_cache = {}
         self._base_path = base_path
         self._search_paths = new_search_paths
+        self._documents = new_documents
+        self._namespaces = dict(namespaces) if namespaces else {}
+        self._node_types_by_file = {
+            fname: frozenset(names) for fname, names in (node_types_by_file or {}).items()
+        }
         self._imports = {}
         self._no_import_files = set()
         self._expanded_link_types = set()
@@ -2033,9 +2072,15 @@ def convert_schema(
     base_path: Path | None = None,
     search_paths: list[Path] | None = None,
     source_path: Path | None = None,
+    *,
+    documents: Mapping[str, dict[str, Any]] | None = None,
+    namespaces: Mapping[str, str] | None = None,
+    node_types_by_file: Mapping[str, Collection[str]] | None = None,
 ) -> ConversionResult:
     return Converter().convert_schema(root_schema, top_level_name, node_type_names,
-                                      base_path, search_paths, source_path)
+                                      base_path, search_paths, source_path,
+                                      documents=documents, namespaces=namespaces,
+                                      node_types_by_file=node_types_by_file)
 
 
 def build_tosca_document(

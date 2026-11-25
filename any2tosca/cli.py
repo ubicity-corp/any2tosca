@@ -101,8 +101,8 @@ def _report(result: ConversionResult, verbose: bool, path: Path) -> None:
         print(f"  ✓  {total} type(s): {', '.join(names)}")
 
 
-def _write_file(result: ConversionResult, input_path: Path, out_dir: Path) -> Path:
-    """Write a single ConversionResult to <out_dir>/<input_stem>.yaml (and companion _caps.yaml)."""
+def _write_file(result: ConversionResult, stem: str, out_dir: Path) -> Path:
+    """Write a single ConversionResult to <out_dir>/<stem>.yaml (and companion _caps.yaml)."""
     tosca_doc = build_tosca_document(
         result.data_types,
         result.node_types,
@@ -110,11 +110,10 @@ def _write_file(result: ConversionResult, input_path: Path, out_dir: Path) -> Pa
         result.interface_types or None,
         result.imports or None,
     )
-    out_path = out_dir / input_path.with_suffix(".yaml").name
+    out_path = out_dir / f"{stem}.yaml"
     out_path.write_text(dump_tosca_yaml(tosca_doc), encoding="utf-8")
 
     if result.capability_types:
-        stem = input_path.stem
         # Strip version suffix (e.g. .v1_14_0) to get the base name
         base = re.sub(r"[._]v\d+(?:[._]\d+)*$", "", stem) or stem
         caps_path = out_dir / f"{base}_caps.yaml"
@@ -166,7 +165,7 @@ def main_json(argv: list[str] | None = None) -> int:
         _report(result, args.verbose, schema_path)
         if not result.data_types and not result.node_types:
             continue
-        out_path = _write_file(result, schema_path, out_dir)
+        out_path = _write_file(result, schema_path.stem, out_dir)
         print(f"  → {out_path}")
         written += 1
 
@@ -226,7 +225,7 @@ def main_redfish(argv: list[str] | None = None) -> int:
         _report(result, args.verbose, schema_path)
         if not result.data_types and not result.node_types:
             continue
-        out_path = _write_file(result, schema_path, out_dir)
+        out_path = _write_file(result, schema_path.stem, out_dir)
         print(f"  → {out_path}")
         written += 1
 
@@ -287,7 +286,7 @@ def main_oas(argv: list[str] | None = None) -> int:
         _report(result, args.verbose, api_path)
         if not result.data_types and not result.node_types:
             continue
-        out_path = _write_file(result, api_path, out_dir)
+        out_path = _write_file(result, api_path.stem, out_dir)
         print(f"  → {out_path}")
         written += 1
 
@@ -342,7 +341,7 @@ def main_yang(argv: list[str] | None = None) -> int:
         _report(result, args.verbose, yang_path)
         if not result.data_types and not result.node_types:
             continue
-        out_path = _write_file(result, yang_path, out_dir)
+        out_path = _write_file(result, yang_path.stem, out_dir)
         print(f"  → {out_path}")
         written += 1
 

@@ -936,3 +936,102 @@ def test_cli_bad_json(tmp_path: Path):
     out_dir = tmp_path / "out"
     rc = main_json([str(bad), "-o", str(out_dir)])
     assert rc != 0
+
+
+# ── In-memory documents, namespace overrides, node types by file ──────────────
+
+_UNIT_APPS = {
+    "definitions": {
+        "Deployment": {
+            "type": "object",
+            "properties": {
+                "spec": {"$ref": "#/definitions/DeploymentSpec"},
+                "template": {"$ref": "pods.json#/definitions/PodTemplateSpec"},
+            },
+        },
+        "DeploymentSpec": {
+            "type": "object",
+            "properties": {"replicas": {"type": "integer"}},
+        },
+        "Holder": {
+            "type": "object",
+            "properties": {"pod": {"$ref": "pods.json#/definitions/Pod"}},
+        },
+    }
+}
+_UNIT_PODS = {
+    "definitions": {
+        "PodTemplateSpec": {
+            "type": "object",
+            "properties": {"labels": {"type": "string"}},
+        },
+        "Pod": {
+            "type": "object",
+            "properties": {"name": {"type": "string"}},
+        },
+    }
+}
+_UNITS = {"apps.json": _UNIT_APPS, "pods.json": _UNIT_PODS}
+
+
+def _convert_apps(**kwargs):
+    return Converter().convert_schema(
+        _UNIT_APPS, "apps", {"Deployment", "Holder"},
+        source_path=Path("apps.json"), documents=_UNITS, **kwargs,
+    )
+
+
+def test_in_memory_document_ref_becomes_namespaced_import():
+    result = _convert_apps()
+    template = result.node_types["Deployment"]["properties"]["template"]
+    assert template["type"] == "pods:PodTemplateSpec"
+    assert result.imports["pods"] == "pods.yaml"
+
+
+def test_in_memory_local_ref_stays_local():
+    result = _convert_apps()
+    assert result.node_types["Deployment"]["properties"]["spec"]["type"] == "DeploymentSpec"
+
+
+def test_in_memory_documents_need_no_base_path():
+    # resolve_ref reads the referenced in-memory schema, so an allOf merge works.
+    schema = {"definitions": {"Wrapped": {
+        "allOf": [{"$ref": "pods.json#/definitions/PodTemplateSpec"}],
+        "properties": {"extra": {"type": "integer"}},
+    }}}
+    result = Converter().convert_schema(
+        schema, "w", source_path=Path("w.json"), documents={**_UNITS, "w.json": schema},
+    )
+    wrapped = result.data_types["Wrapped"]
+    assert "extra" in wrapped["properties"]
+
+
+def test_namespace_override_used_for_type_and_import():
+    result = _convert_apps(namespaces={"pods.json": "kpods"})
+    template = result.node_types["Deployment"]["properties"]["template"]
+    assert template["type"] == "kpods:PodTemplateSpec"
+    assert result.imports["kpods"] == "pods.yaml"
+    assert "pods" not in result.imports
+
+
+def test_node_types_by_file_makes_cross_file_reference_a_requirement():
+    result = _convert_apps(node_types_by_file={"pods.json": {"Pod"}})
+    holder = result.node_types["Holder"]
+    assert "pod" not in holder.get("properties", {})
+    assert [next(iter(r)) for r in holder["requirements"]] == ["pod"]
+    assert holder["requirements"][0]["pod"]["node"] == "pods:Pod"
+
+
+def test_node_types_by_file_excludes_unlisted_types():
+    result = _convert_apps(node_types_by_file={"pods.json": {"Pod"}})
+    template = result.node_types["Deployment"]["properties"]["template"]
+    assert template["type"] == "pods:PodTemplateSpec"
+    assert "requirements" not in result.node_types["Deployment"]
+
+
+def test_write_file_names_output_by_stem(tmp_path):
+    from any2tosca.cli import _write_file
+    result = ConversionResult(data_types={"T": {"properties": {}}}, node_types={})
+    out = _write_file(result, "apps", tmp_path)
+    assert out == tmp_path / "apps.yaml"
+    assert out.exists()
