@@ -125,9 +125,19 @@ def test_normalizer_marks_status_read_only():
     assert defs[f"{API}.apps.v1.StatefulSet"]["properties"]["status"]["readOnly"] is True
 
 
-def test_normalizer_leaves_data_types_alone():
+def test_normalizer_keeps_data_type_properties():
     defs, _ = _normalized()
-    assert defs[f"{API}.core.v1.Binding"] == DEFS[f"{API}.core.v1.Binding"]
+    binding = defs[f"{API}.core.v1.Binding"]
+    assert binding["properties"] == DEFS[f"{API}.core.v1.Binding"]["properties"]
+
+
+def test_normalizer_collapses_single_gvk_on_data_types_too():
+    defs, _ = _normalized()
+    assert defs[f"{API}.core.v1.Binding"][GVK] == {"group": "", "kind": "Binding", "version": "v1"}
+
+
+def test_normalizer_keeps_multi_entry_gvk_as_a_list():
+    defs, _ = _normalized()
     assert defs[f"{META}.DeleteOptions"][GVK] == DEFS[f"{META}.DeleteOptions"][GVK]
 
 

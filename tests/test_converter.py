@@ -1167,3 +1167,34 @@ def test_read_only_property_of_data_type_stays_a_property():
     status = Converter().convert_schema(_RO_ROOT, "x", {"Deployment"}).data_types["Status"]
     assert "phase" in status["properties"]
     assert "attributes" not in status
+
+
+# ── Property names, untyped definitions ───────────────────────────────────────
+
+def test_property_names_keep_dashes_and_dots():
+    root = {"definitions": {"T": {"type": "object", "properties": {
+        "x-kubernetes-list-type": {"type": "string"}, "a.b": {"type": "string"}, "$ref": {"type": "string"}}}}}
+    props = Converter().convert_schema(root, "x").data_types["T"]["properties"]
+    assert set(props) == {"x-kubernetes-list-type", "a.b", "$ref"}
+
+
+def test_type_names_are_still_sanitized():
+    root = {"definitions": {"my-type.v1": {"type": "object", "properties": {}}}}
+    assert set(Converter().convert_schema(root, "x").data_types) == {"my_type_v1"}
+
+
+def test_untyped_definition_derives_from_string():
+    root = {"definitions": {"JSON": {"description": "Any JSON value."}}}
+    jt = Converter().convert_schema(root, "x").data_types["JSON"]
+    assert jt["derived_from"] == "string"
+
+
+def test_untyped_definition_with_structure_is_not_a_string():
+    root = {"definitions": {
+        "Arr": {"items": {"type": "string"}},
+        "Map": {"additionalProperties": {"type": "string"}},
+        "Obj": {"properties": {"a": {"type": "string"}}},
+        "Alias": {"$ref": "#/definitions/Obj"},
+    }}
+    types = Converter().convert_schema(root, "x").data_types
+    assert all(types[n].get("derived_from") != "string" for n in ("Arr", "Map", "Obj", "Alias") if n in types)

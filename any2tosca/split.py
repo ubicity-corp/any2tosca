@@ -359,7 +359,10 @@ def _rewrite(
         target_type = definitions.get(t[0], {}).get("type") if isinstance(definitions.get(t[0]), dict) else None
         fallback.setdefault("type", target_type or "object")
         return fallback
-    out = {k: _rewrite(v, unit, assigned, skipped, definitions) for k, v in obj.items() if k != "$ref"}
+    # A '$ref' key whose value is not a string is not a reference (for example
+    # a property named '$ref' inside 'properties'); it is rewritten like any key.
+    out = {k: _rewrite(v, unit, assigned, skipped, definitions)
+           for k, v in obj.items() if not (k == "$ref" and isinstance(v, str))}
     if isinstance(ref, str):
         if t is not None and t[0] in assigned:
             a = assigned[t[0]]

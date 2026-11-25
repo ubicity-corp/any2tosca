@@ -238,7 +238,8 @@ def test_end_to_end_required_property(yang_file):
                                         base_path=yang_file.parent)
     props = result.node_types["Server"]["properties"]
     assert props["name"]["required"] is True
-    assert props["cpu_count"]["required"] is False
+    # Property names keep YANG's dashes (TOSCA names may contain them).
+    assert props["cpu-count"]["required"] is False
 
 
 # ── CLI integration ───────────────────────────────────────────────────────────

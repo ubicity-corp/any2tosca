@@ -57,7 +57,8 @@ This is a Python package that converts JSON Schema documents (and Redfish, OpenA
 - TOSCA version: **tosca_2_0**. Imports use `url` + `namespace` keywords.
 - Object schemas without an explicit parent: no `derived_from` added. Scalar/enum definitions: `derived_from: <tosca_primitive_type>`.
 - JSON `number` → TOSCA `float`; JSON `null` → `string`.
-- `sanitize_name()` replaces spaces, dashes, and dots with underscores.
+- `sanitize_name()` replaces spaces, dashes, and dots with underscores in **type** names. Property and attribute names are kept as the schema spells them (TOSCA prefers kebab case).
+- A definition with no `type`, no properties and no structure (`$ref`, `items`, `additionalProperties`, composition) derives from `string`, as an untyped property does.
 - External `$ref` resolution: local `#/...` refs resolved against root schema; relative file refs and HTTP URI refs resolved via a `referencing.Registry` built from all `.json` files in `base_path` and `-I` search dirs, with filename-based fallback.
 - When `allOf`/`anyOf`/`oneOf` merges properties from an external file, local `#/definitions/TypeName` refs inside those properties are rewritten to `ExternalFile.json#/definitions/TypeName` so the TOSCA output uses namespaced type references and records the correct import.
 - `anyOf`/`oneOf` with versioned refs (`BaseName.vX_Y_Z`): latest versioned ref → `derived_from`; unversioned refs' properties are merged in.

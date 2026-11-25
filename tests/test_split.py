@@ -297,3 +297,12 @@ def test_cli_profile_requires_split(tmp_path, capsys):
     schema.write_text(json.dumps({"type": "object", "properties": {}}))
     assert main_json([str(schema), "--profile", "io.x:1.0", "-o", str(tmp_path / "o")]) == 1
     assert "--profile requires --split" in capsys.readouterr().err
+
+
+def test_property_named_dollar_ref_is_kept():
+    root = {"definitions": {"io.x.apps.v1.Props": _obj(**{
+        "$ref": {"type": "string"}, "other": _ref("io.x.apps.v1.Other")}),
+        "io.x.apps.v1.Other": _obj()}}
+    props = _units(split_schema(root, _rules(*GROUP_RULES)))["apps"].document["definitions"]["Props"]["properties"]
+    assert props["$ref"] == {"type": "string"}
+    assert props["other"] == {"$ref": "#/definitions/Other"}

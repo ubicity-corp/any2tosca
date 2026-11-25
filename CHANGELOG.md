@@ -29,6 +29,14 @@ What changed in each release, and what to do about it.
   specification into one file per GA API group, using packaged split rules,
   with `x-kubernetes-*` extensions as metadata, resource types without
   `apiVersion`/`kind` properties, and `status` as an attribute.
+- **Property names keep the schema's spelling.** Property and attribute names
+  are no longer sanitized: `cpu-count` stays `cpu-count` (it was `cpu_count`),
+  and names such as `$ref` and `x-kubernetes-list-type` are kept. Type names
+  are still sanitized. This changes YANG output for every leaf whose name
+  contains `-`.
+- **Untyped definitions derive from `string`.** A definition with no `type`
+  and no structure (any JSON value) becomes a data type derived from `string`,
+  as an untyped property already was, instead of an empty data type.
 - **`oas2tosca` now defaults to `value`.** Its output no longer has
   capabilities, requirements, `_caps.yaml` files or a `Core.yaml` import, and
   data types holding a node type's schema stay data types. Pass

@@ -1,8 +1,7 @@
 # Kubernetes Conversion
 
-**Status:** Implemented (`oas2tosca --kubernetes`). The 1.35 baseline comparison is
-recorded under [Baseline comparison (1.35)](#baseline-comparison-135); its open
-findings are not yet fixed.
+**Status:** Implemented (`oas2tosca --kubernetes`), and compared with the 1.35
+baseline (see [Baseline comparison (1.35)](#baseline-comparison-135)).
 
 `oas2tosca --kubernetes` converts the Kubernetes OpenAPI specification
 (`api/openapi-spec/swagger.json` in the Kubernetes repository) into the generated
@@ -165,9 +164,10 @@ Not copied: `x-kubernetes-patch-strategy` and `x-kubernetes-patch-merge-key`
 union members, embedded objects and server-side validation, none of which a TOSCA
 type expresses).
 
-The specification gives group-version-kind as a list. For a node type it always
-has one entry, and the normalizer replaces the list by that entry, so the metadata
-is a map, as in the published profile. The core group is the empty string and is
+The specification gives group-version-kind as a list. The normalizer replaces a
+one-entry list by its entry, so the metadata is a map, as in the published
+profile. Every node type has one entry; `DeleteOptions` and `WatchEvent`, data
+types with one entry per API group, keep the list. The core group is the empty string and is
 written as `group: ''`, which makes the `GENERATING.md` Step 2 "empty values"
 hand fix unnecessary.
 
@@ -233,15 +233,16 @@ The rules cover every GA group: 19 in 1.35, 20 in 1.37. The published profile ag
 ## Resource adjustments
 
 `KubernetesNormalizer` (`any2tosca/kubernetes.py`) runs after `OpenAPIExtractor`
-and before the split. For each **node-type** schema it:
+and before the split. On every definition it replaces a one-entry
+`x-kubernetes-group-version-kind` list by its entry. For each **node-type**
+schema it also:
 
-1. Replaces the `x-kubernetes-group-version-kind` list by its single entry.
-2. Removes the `apiVersion` and `kind` properties. The node type determines
+1. Removes the `apiVersion` and `kind` properties. The node type determines
    both, and the group-version-kind metadata states them. Data types keep theirs:
    in `ObjectReference` or `OwnerReference`, `kind` is a real field.
-3. Sets `readOnly: true` on the `status` property, so it becomes an attribute.
+2. Sets `readOnly: true` on the `status` property, so it becomes an attribute.
 
-Steps 2 and 3 are the generated half of `GENERATING.md` Part 2, Step 3. The rest
+These two steps are the generated half of `GENERATING.md` Part 2, Step 3. The rest
 of that step (the `Resource` base type and its `cluster` requirement) stays
 hand-written.
 
@@ -339,7 +340,7 @@ property metadata, and per property the type, entry and key schemas,
 `required`, default and validation. Descriptions and formatting are not
 compared. Run 2026-11-25.
 
-### Differences the design predicts
+### Differences from the baseline
 
 | Difference | Count |
 |---|---|
@@ -352,6 +353,7 @@ compared. Run 2026-11-25.
 | `autoscaling/v2` `HorizontalPodAutoscaler` replaces `v1`: four properties differ, `currentReplicas` is optional, and 19 `v2` data types are new | 1 type |
 | `x-kubernetes-map-type` metadata, which `oas2tosca` did not copy | 26 types, 7 properties |
 | `io.k8s.apimachinery.pkg.version` not produced (skipped by the rules) | 1 profile |
+| API response and discovery types the baseline left out, because `oas2tosca` emitted only types reachable from a resource: `meta` `Status`, `StatusCause`, `StatusDetails`, `WatchEvent`, `APIGroup`, `APIResource`, `APIVersions`, `GroupVersionForDiscovery`, `ServerAddressByClientCIDR`, `GroupResource`, `ListMeta`, `Patch`; `core` `ComponentStatus`, `ComponentCondition`; and `PersistentVolumeClaimValue` | 15 data types |
 
 ### Baseline defects the regeneration corrects
 
@@ -361,41 +363,3 @@ compared. Run 2026-11-25.
 - **`PersistentVolumeClaim` was a data type** in the baseline. It is a node type.
 - **`DeleteOptions` kept only the first of its 62 group-version-kinds**, as a
   map. All of them are kept, as a list.
-
-### Open findings
-
-1. **The splitter drops a property named `$ref`.** `JSONSchemaProps` (the schema
-   of a custom resource's schema, `apiextensions`) has a property called `$ref`.
-   The splitter's reference rewriting treats every `$ref` key as a reference and
-   loses this one. The converter and the by-value pre-pass keep it. Proposed fix:
-   treat `$ref` as a reference only when its value is a string, and test a
-   property named `$ref` through the split.
-2. **Property names are sanitized.** The seven `JSONSchemaProps` properties
-   named `x-kubernetes-...` become `x_kubernetes_...`, which changes the field
-   name a manifest built from them would carry. `sanitize_name` replaces `-`,
-   `.` and spaces in type **and** property names for every input format,
-   including YANG, whose leaf names commonly contain `-`. Proposed fix: sanitize
-   type names only and keep property names as the schema spells them, which
-   changes the YANG output for every dash-named leaf. Needs a decision.
-3. **Group-version-kind stays a list on data types.** The normalizer collapses
-   the single-entry list on node types only, so the action requests, `Binding`,
-   `Eviction` and `Scale` (11 data types) keep a one-entry list while every
-   node type has a map. Proposed fix: collapse every single-entry list,
-   whatever the type, and keep multi-entry lists (`DeleteOptions`,
-   `WatchEvent`).
-4. **Untyped definitions become empty data types.** `apiextensions` `JSON`,
-   `JSONSchemaPropsOrArray`, `JSONSchemaPropsOrBool` and
-   `JSONSchemaPropsOrStringArray` describe any JSON value and have no `type`.
-   They convert to a data type with no `derived_from` and no properties. The
-   baseline derives them from `string`, which is also what the converter does
-   for an untyped property. Proposed fix: a definition with no `type`,
-   no properties and no composition derives from `string`, in every format.
-   Needs a decision.
-5. **15 more data types than the baseline.** `oas2tosca` emitted only the types
-   reachable from a resource; `any2tosca` emits every kept definition. The extra
-   ones are API response and discovery types: `meta` `Status`, `StatusCause`,
-   `StatusDetails`, `WatchEvent`, `APIGroup`, `APIResource`, `APIVersions`,
-   `GroupVersionForDiscovery`, `ServerAddressByClientCIDR`, `GroupResource`,
-   `ListMeta`, `Patch`, and `core` `ComponentStatus` and `ComponentCondition`,
-   plus `PersistentVolumeClaimValue`. They are complete and harmless. Proposed:
-   keep them. Skipping them would take one rule each.

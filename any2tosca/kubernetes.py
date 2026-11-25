@@ -5,9 +5,10 @@ Kubernetes conventions for converting the Kubernetes OpenAPI specification
 (``oas2tosca --kubernetes``).  See ``docs/kubernetes.md``.
 
 ``KubernetesNormalizer`` runs after ``OpenAPIExtractor`` and adjusts the
-resource (node-type) schemas: the group-version-kind becomes a single map,
-the ``apiVersion`` and ``kind`` properties go (the node type determines them),
-and ``status`` is marked ``readOnly`` so that it converts to an attribute.
+schemas: a single group-version-kind becomes a map; and on the resource
+(node-type) schemas the ``apiVersion`` and ``kind`` properties go (the node
+type determines them) and ``status`` is marked ``readOnly`` so that it
+converts to an attribute.
 """
 
 from __future__ import annotations
@@ -61,27 +62,29 @@ class KubernetesNormalizer:
 
         For each node-type definition:
 
-        1. a single-entry ``x-kubernetes-group-version-kind`` list is replaced
-           by its entry, so the metadata is a map;
-        2. the ``apiVersion`` and ``kind`` properties are removed (also from
+        1. the ``apiVersion`` and ``kind`` properties are removed (also from
            ``required``);
-        3. the ``status`` property is marked ``readOnly: true``.
+        2. the ``status`` property is marked ``readOnly: true``.
+
+        On every definition, a single-entry ``x-kubernetes-group-version-kind``
+        list is replaced by its entry, so the metadata is a map.  A list with
+        several entries (``DeleteOptions``, ``WatchEvent``) stays a list.
         """
         names = set(node_type_names)
         result = copy.deepcopy(root_schema)
         definitions = result.get("definitions") or {}
-        for name in names:
-            schema = definitions.get(name)
-            if isinstance(schema, dict):
+        for name, schema in definitions.items():
+            if not isinstance(schema, dict):
+                continue
+            gvk = schema.get(GVK)
+            if isinstance(gvk, list) and len(gvk) == 1:
+                schema[GVK] = gvk[0]
+            if name in names:
                 self._adjust(schema)
         return result, names
 
     @staticmethod
     def _adjust(schema: dict[str, Any]) -> None:
-        gvk = schema.get(GVK)
-        if isinstance(gvk, list) and len(gvk) == 1:
-            schema[GVK] = gvk[0]
-
         properties = schema.get("properties")
         if isinstance(properties, dict):
             for prop in _TYPE_DETERMINED:

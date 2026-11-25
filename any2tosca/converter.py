@@ -1807,8 +1807,10 @@ class Converter:
                 else:
                     regular_props[pname] = pschema
 
+            # Property names are kept as the schema spells them (TOSCA names may
+            # contain '-'); only type names are sanitized.
             all_props = {
-                self.sanitize_name(pname): self.schema_to_property(
+                pname: self.schema_to_property(
                     pname, pschema, required_list, root_schema, data_types
                 )
                 for pname, pschema in regular_props.items()
@@ -1821,7 +1823,7 @@ class Converter:
             if is_node_type:
                 for pname, pschema in regular_props.items():
                     if isinstance(pschema, dict) and pschema.get("readOnly") is True:
-                        aname = self.sanitize_name(pname)
+                        aname = pname
                         attribute = all_props.pop(aname)
                         attribute.pop("required", None)
                         attributes[aname] = attribute
@@ -1865,6 +1867,15 @@ class Converter:
                 if validation is not None:
                     tosca_type["validation"] = validation
                 tosca_type.pop("properties", None)
+            elif (not json_type and not properties_schema and not derived_from
+                  and not any(k in schema for k in ("$ref", "items", "additionalProperties"))):
+                # A definition with no type and no structure accepts any JSON
+                # value.  TOSCA has no 'any' type; use string, as for an untyped
+                # property.
+                tosca_type["derived_from"] = "string"
+                validation = self.build_validation(schema)
+                if validation is not None:
+                    tosca_type["validation"] = validation
 
         return tosca_type
 
