@@ -270,6 +270,14 @@ Comparing the result of the new generator with the published profile:
 - **End to end:** the trimmed Kubernetes fixture from the multi-output tests,
   extended with `StatefulSet`, `PersistentVolumeClaim`, `Binding`, an autoscaling
   `v1` and `v2` pair, a `resource.k8s.io` kind and a `*List` kind. Golden output.
+- **Baseline comparison:** the unmodified `oas2tosca` output for 1.35 is kept in the
+  community repository (`tosca-community-contributions`, `profiles/io/k8s/`, one
+  profile per API group). Converting the 1.35 specification and comparing the
+  result with it, unit by unit, shows every difference in the generated part
+  of the profile without the hand-written post-processing in the way. The
+  differences should be exactly those listed under
+  [What regeneration changes](#what-regeneration-changes-in-the-published-profile),
+  plus the TOSCA 1.3 to 2.0 syntax.
 - **Full spec:** converting the real 1.37 `swagger.json` succeeds, writes 26 unit
   files (20 API groups plus six library and extension units), and its `profile.yaml` onboards with the `ubicity` CLI. Run by hand, not in
   CI, because the input is 3.8 MB and fetched from upstream.
