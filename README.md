@@ -9,13 +9,17 @@ truth rather than written by hand. The generated types can then be checked
 with [tosca-core](https://github.com/ubicity-corp/tosca-core), the open-source
 TOSCA parser and validator.
 
-| Command | Input |
-|---|---|
-| `any2tosca` | [JSON Schema](https://json-schema.org/) |
-| `oas2tosca` | [OpenAPI](https://www.openapis.org/) 2.0 / 3.x |
-| `oas2tosca --kubernetes` | the [Kubernetes](https://kubernetes.io/) OpenAPI specification |
-| `redfish2tosca` | [Redfish](https://www.dmtf.org/standards/redfish) JSON Schema |
-| `yang2tosca` | [YANG](https://datatracker.ietf.org/doc/html/rfc7950) modules |
+| Command | `any2tosca --format` | Input |
+|---|---|---|
+| `any2tosca` | `jsonschema` (the default) | [JSON Schema](https://json-schema.org/) |
+| `oas2tosca` | `openapi` | [OpenAPI](https://www.openapis.org/) 2.0 / 3.x |
+| `oas2tosca --kubernetes` | `kubernetes` | the [Kubernetes](https://kubernetes.io/) OpenAPI specification |
+| `redfish2tosca` | `redfish` | [Redfish](https://www.dmtf.org/standards/redfish) JSON Schema |
+| `yang2tosca` | `yang` | [YANG](https://datatracker.ietf.org/doc/html/rfc7950) modules |
+
+Each command converts one input format; `any2tosca --format` reaches every
+format from one command (`any2tosca --format openapi api.yaml` is
+`oas2tosca api.yaml`).
 
 ## A quick example
 
@@ -95,6 +99,7 @@ yang2tosca server.yang -o tosca/
 | `-o DIR`, `--output DIR` | the output directory (default: `tosca/`) |
 | `-I DIR`, `--include-dir DIR` | another directory to search for referenced schema files; repeatable |
 | `-v`, `--verbose` | list the types as they are converted |
+| `--format FORMAT` | `any2tosca` only: the input format, `jsonschema` (default), `openapi`, `kubernetes`, `redfish` or `yang` |
 | `--profile NAME:VERSION` | also package the output as a profile (see [Output as a profile](#output-as-a-profile)) |
 | `--relationship-model links\|value` | how references to node types are converted (see [Relationship models](#relationship-models)); the default is `links` for `redfish2tosca` and `value` for the others |
 | `--extension-metadata KEY` | copy schema key `KEY` (typically a vendor extension, `x-...`) into the `metadata` of the type or property it appears on; repeatable |

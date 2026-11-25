@@ -23,7 +23,7 @@ from typing import Any
 
 from .companions import CompanionError, add_value_companions
 from .converter import ConversionResult, Conventions, Converter, build_caps_document, build_tosca_document
-from .formats import JSON_SCHEMA, KUBERNETES, OPENAPI, REDFISH, YANG, InputFormat, Normalized
+from .formats import FORMATS, JSON_SCHEMA, KUBERNETES, OPENAPI, REDFISH, YANG, InputFormat, Normalized
 from .split import SplitError, load_rules, skipped_definitions, split_schema
 from .yaml_utils import FoldedStr, dump_tosca_yaml
 
@@ -33,8 +33,10 @@ __all__ = ["main_json", "main_redfish", "main_oas", "main_yang", "run"]
 # ── Options ───────────────────────────────────────────────────────────────────
 
 def _make_parser(
-    prog: str, description: str, epilog: str, default_model: str = "links"
+    prog: str, description: str, epilog: str, default_model: str | None = "links"
 ) -> argparse.ArgumentParser:
+    """The options every command takes.  With *default_model* None, the
+    relationship model defaults to the chosen format's (``any2tosca --format``)."""
     parser = argparse.ArgumentParser(
         prog=prog,
         description=description,
@@ -72,7 +74,8 @@ def _make_parser(
         default=default_model,
         help="How references to node types are converted: 'links' makes them "
              "requirements and adds the Core.yaml capabilities; 'value' treats them "
-             f"as embedded values (default: {default_model}).",
+             "as embedded values (default: "
+             + (default_model or "the format's: links for redfish, value otherwise") + ").",
     )
     parser.add_argument(
         "--extension-metadata",
@@ -110,6 +113,8 @@ def _make_parser(
 
 def _apply_format_defaults(fmt: InputFormat, args: argparse.Namespace) -> str | None:
     """Merge the format's defaults into *args*; return an error message, or None."""
+    if args.relationship_model is None:
+        args.relationship_model = fmt.conventions.relationship_model
     if fmt.required_relationship_model and args.relationship_model != fmt.required_relationship_model:
         return (f"the {fmt.name} format requires the "
                 f"{fmt.required_relationship_model} relationship model.")
@@ -387,17 +392,29 @@ def run(fmt: InputFormat, args: argparse.Namespace) -> int:
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 def main_json(argv: list[str] | None = None) -> int:
-    """Convert plain JSON Schema files to TOSCA."""
+    """Convert schemas to TOSCA: JSON Schema, or the format --format names."""
     parser = _make_parser(
         "any2tosca",
-        "Convert JSON Schema files to TOSCA data types (YAML).",
+        "Convert JSON Schema files, or the input format --format names, to TOSCA "
+        "node and data types (YAML).",
         "Examples:\n"
         "  any2tosca my_schema.json\n"
         "  any2tosca schemas/ -o output/\n"
-        "  any2tosca a.json b.json -o output/",
-        default_model=JSON_SCHEMA.conventions.relationship_model,
+        "  any2tosca --format openapi api.yaml -o output/\n"
+        "  any2tosca --format kubernetes swagger.json --profile io.kubernetes:1.37 -o k8s/",
+        default_model=None,
     )
-    return run(JSON_SCHEMA, parser.parse_args(argv))
+    parser.add_argument(
+        "--format",
+        choices=sorted(FORMATS),
+        default=JSON_SCHEMA.name,
+        help="The input format (default: jsonschema). Each other command converts one "
+             "format: oas2tosca is --format openapi, oas2tosca --kubernetes is "
+             "--format kubernetes, redfish2tosca is --format redfish, yang2tosca is "
+             "--format yang.",
+    )
+    args = parser.parse_args(argv)
+    return run(FORMATS[args.format], args)
 
 
 def main_redfish(argv: list[str] | None = None) -> int:

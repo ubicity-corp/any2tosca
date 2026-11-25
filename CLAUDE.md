@@ -32,7 +32,7 @@ This is a Python package that converts JSON Schema documents (and Redfish, OpenA
 **Core modules:**
 
 - `any2tosca/converter.py` — all conversion logic. `Converter` class is the main workhorse; `convert_schema()` and `build_tosca_document()` are module-level convenience wrappers.
-- `any2tosca/cli.py` — one pipeline, `run(fmt, args)`, for every format: collect input files, load and normalize, by-value pre-pass, split or convert, write. The four entry points (`main_json`, `main_redfish`, `main_oas`, `main_yang`) pick a format; `oas2tosca --kubernetes` picks `KUBERNETES`.
+- `any2tosca/cli.py` — one pipeline, `run(fmt, args)`, for every format: collect input files, load and normalize, by-value pre-pass, split or convert, write. The four entry points (`main_json`, `main_redfish`, `main_oas`, `main_yang`) pick a format; `oas2tosca --kubernetes` picks `KUBERNETES`, and `any2tosca --format NAME` picks any format from `formats.FORMATS` (the relationship model then defaults to that format's).
 - `any2tosca/formats.py` — `InputFormat` (extensions, loader, chain of normalizers returning `Normalized(root_schema, node_type_names, top_level_name)`, `Conventions`, packaged split rules) and the five formats `JSON_SCHEMA`, `REDFISH`, `OPENAPI`, `KUBERNETES`, `YANG`. A new format is a new `InputFormat`, not a new pipeline.
 - `any2tosca/redfish.py` — `RedfishNormalizer`: strips OData properties, promotes `x-longDescription`, identifies node type names from Redfish resource schemas.
 - `any2tosca/openapi.py` — `OpenAPIExtractor`: hoists `components/schemas` (OAS 3.x) or `definitions` (Swagger 2.x) into a root JSON Schema, identifies POST request bodies as node types when the same path also supports GET (POST-only paths are actions → data types).

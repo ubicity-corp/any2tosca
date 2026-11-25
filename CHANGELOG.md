@@ -2,6 +2,14 @@
 
 What changed in each release, and what to do about it.
 
+## Unreleased
+
+- **`any2tosca --format`** reaches every input format from one command:
+  `jsonschema` (the default), `openapi`, `kubernetes`, `redfish` and `yang`.
+  It converts exactly as the format's own command does (`--format kubernetes`
+  is `oas2tosca --kubernetes`), and the relationship model defaults to the
+  format's. The other commands are unchanged.
+
 ## 1.0.0
 
 The first stable release. The commands, their options and the form of their

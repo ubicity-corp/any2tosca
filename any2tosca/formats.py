@@ -32,7 +32,7 @@ from .yang import YANGNormalizer
 
 __all__ = [
     "Normalized", "InputFormat",
-    "JSON_SCHEMA", "REDFISH", "OPENAPI", "KUBERNETES", "YANG",
+    "JSON_SCHEMA", "REDFISH", "OPENAPI", "KUBERNETES", "YANG", "FORMATS",
 ]
 
 
@@ -158,3 +158,8 @@ YANG = InputFormat(
     load=load_path, normalizers=(_yang,), parse_errors=(Exception,),
     conventions=Conventions(relationship_model="value"),
 )
+
+#: Every format by name: the values of ``any2tosca --format``.
+FORMATS: dict[str, InputFormat] = {
+    fmt.name: fmt for fmt in (JSON_SCHEMA, OPENAPI, KUBERNETES, REDFISH, YANG)
+}

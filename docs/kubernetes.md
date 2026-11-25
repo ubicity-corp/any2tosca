@@ -9,7 +9,8 @@ group, node types for the resources and data types for everything else.
 oas2tosca --kubernetes swagger.json --profile io.kubernetes:1.37 -o io/kubernetes/1.37/
 ```
 
-`--kubernetes` takes exactly one input file. It is the same as `oas2tosca` with:
+`any2tosca --format kubernetes` is the same command. `--kubernetes` takes exactly
+one input file. It is the same as `oas2tosca` with:
 
 - `--split` set to the packaged rules,
   [any2tosca/rules/kubernetes.yaml](../any2tosca/rules/kubernetes.yaml); an
