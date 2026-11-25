@@ -32,7 +32,8 @@ This is a Python package that converts JSON Schema documents (and Redfish, OpenA
 **Core modules:**
 
 - `any2tosca/converter.py` — all conversion logic. `Converter` class is the main workhorse; `convert_schema()` and `build_tosca_document()` are module-level convenience wrappers.
-- `any2tosca/cli.py` — four entry points (`main_json`, `main_redfish`, `main_oas`, `main_yang`) for the four CLI tools. Each collects input files, runs conversion, and writes one `.yaml` per input file.
+- `any2tosca/cli.py` — one pipeline, `run(fmt, args)`, for every format: collect input files, load and normalize, by-value pre-pass, split or convert, write. The four entry points (`main_json`, `main_redfish`, `main_oas`, `main_yang`) pick a format; `oas2tosca --kubernetes` picks `KUBERNETES`.
+- `any2tosca/formats.py` — `InputFormat` (extensions, loader, chain of normalizers returning `Normalized(root_schema, node_type_names, top_level_name)`, `Conventions`, packaged split rules) and the five formats `JSON_SCHEMA`, `REDFISH`, `OPENAPI`, `KUBERNETES`, `YANG`. A new format is a new `InputFormat`, not a new pipeline. Design: `docs/generalization.md`.
 - `any2tosca/redfish.py` — `RedfishNormalizer`: strips OData properties, promotes `x-longDescription`, identifies node type names from Redfish resource schemas.
 - `any2tosca/openapi.py` — `OpenAPIExtractor`: hoists `components/schemas` (OAS 3.x) or `definitions` (Swagger 2.x) into a root JSON Schema, identifies POST request bodies as node types when the same path also supports GET (POST-only paths are actions → data types).
 - `any2tosca/yang.py` — `YANGNormalizer`: converts YANG `.yang` files to a JSON-Schema-like dict via `pyang`.
@@ -61,10 +62,11 @@ This is a Python package that converts JSON Schema documents (and Redfish, OpenA
 - A definition with no `type`, no properties and no structure (`$ref`, `items`, `additionalProperties`, composition) derives from `string`, as an untyped property does.
 - External `$ref` resolution: local `#/...` refs resolved against root schema; relative file refs and HTTP URI refs resolved via a `referencing.Registry` built from all `.json` files in `base_path` and `-I` search dirs, with filename-based fallback.
 - When `allOf`/`anyOf`/`oneOf` merges properties from an external file, local `#/definitions/TypeName` refs inside those properties are rewritten to `ExternalFile.json#/definitions/TypeName` so the TOSCA output uses namespaced type references and records the correct import.
-- `anyOf`/`oneOf` with versioned refs (`BaseName.vX_Y_Z`): latest versioned ref → `derived_from`; unversioned refs' properties are merged in.
+- `anyOf`/`oneOf` with versioned refs (`BaseName.vX_Y_Z`, Redfish rules only): latest versioned ref → `derived_from`; unversioned refs' properties are merged in.
 - External `$ref` type names become `namespace:TypeName`; the namespace is derived from the filename (≤8 chars, lowercase, PascalCase split, vowel-contracted).
-- Relationship model (`Converter.convert_schema(relationship_model=...)`, CLI `--relationship-model`): `links` (Redfish conventions: requirements, Feature/Containable caps, `_caps.yaml`, `Core.yaml`; default for any2tosca/redfish2tosca/yang2tosca) or `value` (none of those; by-value companions; default for oas2tosca). Design: `docs/kubernetes.md`.
-- Extension metadata (`convert_schema(extension_metadata=[...])`, CLI `--extension-metadata KEY`): listed keys are copied into TOSCA `metadata` from a definition's own schema (not its `allOf` bases) and from a property's own schema (not from the schema it `$ref`s).
+- Conventions (`convert_schema(conventions=Conventions(relationship_model, redfish, extension_metadata))`; each `InputFormat` carries its own). Relationship model, CLI `--relationship-model`: `links` (requirements, Feature/Containable caps, `_caps.yaml`, `Core.yaml`; default for any2tosca/redfish2tosca/yang2tosca) or `value` (none of those; by-value companions; default for oas2tosca). Design: `docs/kubernetes.md`.
+- `redfish=True` (the `REDFISH` format only) enables the Redfish corpus rules: versioned file families (every `_VER_RE` use goes through `Converter._versioned`), version-stripped `_caps.yaml` names, the `redfish.dmtf.org` file-root heuristic, and `Links`/`Actions` expansion. Off for every other format; tests that exercise them pass `Conventions(redfish=True)`.
+- Extension metadata (`Conventions.extension_metadata`, CLI `--extension-metadata KEY`; normalizers keep `x-` keys): listed keys are copied into TOSCA `metadata` from a definition's own schema (not its `allOf` bases) and from a property's own schema (not from the schema it `$ref`s).
 - `readOnly: true` on a node-type property → TOSCA attribute (no `required` key), placed after `properties`. Data types keep readOnly properties as properties.
 - Each input file produces its own `.yaml` output (no merging across files), unless `--split` divides one input into several files.
 

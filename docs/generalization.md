@@ -1,6 +1,7 @@
 # One Pipeline, Format Rules Where Needed
 
-**Status:** Review and proposal (2026-11-25). Not implemented.
+**Status:** Review and proposal (2026-11-25). A, B and C are implemented; D and E
+are open.
 
 `any2tosca` converts JSON Schema to TOSCA, and treats OpenAPI, Redfish, YANG and
 the Kubernetes specification as JSON Schema with extra rules. This document
@@ -126,6 +127,9 @@ class Conventions:
 `convert_schema(..., conventions=...)` replaces the two convention keyword
 arguments. `links` keeps the general relationship rules; the four Redfish rules
 of finding 4 and the `Links`/`Actions` expansions run only when `redfish` is set.
+The explicit file-root convention (a file's top-level `$ref` names its root
+definition) and the general circular-import avoidance are JSON Schema corpus
+handling and apply to every format.
 Presets: Redfish `links` + `redfish`; OpenAPI `value`; Kubernetes `value` plus
 its four extension keys and packaged split rules; JSON Schema and YANG see E.
 
@@ -153,7 +157,7 @@ import; `--relationship-model links` restores the current output.
 | Change | Output change | Notes |
 |---|---|---|
 | A. Formats and one driver | none | the existing CLI tests cover every format |
-| B. Conventions, `redfish` switch | none with the presets | Redfish keeps every rule; the others stop applying rules they never relied on |
+| B. Conventions, `redfish` switch | none with the presets | Redfish keeps every rule; `any2tosca` run on Redfish schema files no longer applies them |
 | C. Extensions kept | none unless `--extension-metadata` | |
 | D. `--profile` without `--split` | new output, only with the option | |
 | E. `value` default for JSON Schema and YANG | yes: no capabilities, `_caps.yaml` or `Core.yaml` | needs a decision |

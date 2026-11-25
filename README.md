@@ -339,7 +339,8 @@ dropping OData annotations and flattening nullable alternatives, then converts
 it. The resource a schema file defines becomes a node type; a family of
 versioned schemas (`Drive.v1_13_0.json`, `Drive.v1_14_0.json`, ...) becomes a
 chain of `derived_from` types; `Links` become `DependsOn` requirements; and
-`Actions` become an interface type.
+`Actions` become an interface type. These Redfish rules apply under
+`redfish2tosca` only; `any2tosca` converts the same files as plain JSON Schema.
 [docs/redfish-conversion.md](docs/redfish-conversion.md) describes every step.
 
 ### YANG → TOSCA
@@ -391,46 +392,51 @@ from any2tosca.yaml_utils import dump_tosca_yaml
 with open("my_schema.json") as f:
     root_schema = json.load(f)
 
-result = convert_schema(root_schema, top_name="MyType",
+result = convert_schema(root_schema, "MyType",
                         base_path=Path("my_schema.json").parent)
 tosca_doc = build_tosca_document(result.data_types, result.node_types,
-                                 result.imports or None)
+                                 imports=result.imports or None)
 print(dump_tosca_yaml(tosca_doc))
 ```
 
 ### OpenAPI
 
+Each format in `any2tosca.formats` (`JSON_SCHEMA`, `OPENAPI`, `KUBERNETES`,
+`REDFISH`, `YANG`) loads and normalizes an input file and carries the
+conventions its command converts with:
+
 ```python
-import json
-from any2tosca.openapi import OpenAPIExtractor
+from pathlib import Path
 from any2tosca import convert_schema, build_tosca_document
+from any2tosca.companions import add_value_companions
+from any2tosca.formats import OPENAPI
 from any2tosca.yaml_utils import dump_tosca_yaml
 
-with open("openapi.json") as f:
-    doc = json.load(f)
-
-root_schema, node_type_names = OpenAPIExtractor().extract(doc)
-result = convert_schema(root_schema, "api", node_type_names)
+path = Path("openapi.json")
+normalized = OPENAPI.normalize(OPENAPI.load(path), path)
+# OpenAPI converts references by value: point them at <Name>Value data types.
+root_schema = add_value_companions(normalized.root_schema, normalized.node_type_names)
+result = convert_schema(root_schema, normalized.top_level_name, normalized.node_type_names,
+                        conventions=OPENAPI.conventions)
 print(dump_tosca_yaml(build_tosca_document(result.data_types, result.node_types)))
 ```
 
 ### Redfish
 
 ```python
-import json
 from pathlib import Path
-from any2tosca.redfish import RedfishNormalizer
 from any2tosca import convert_schema, build_tosca_document
+from any2tosca.formats import REDFISH
 from any2tosca.yaml_utils import dump_tosca_yaml
 
-with open("SimpleServer.v1_0_1.json") as f:
-    schema = json.load(f)
-
-root_schema, node_type_names = RedfishNormalizer().normalize(schema)
-result = convert_schema(root_schema, "SimpleServer", node_type_names,
-                        base_path=Path("SimpleServer.v1_0_1.json").parent)
+path = Path("SimpleServer.v1_0_1.json")
+normalized = REDFISH.normalize(REDFISH.load(path), path)
+# The Redfish conventions: links between resources, versioned schema families.
+result = convert_schema(normalized.root_schema, normalized.top_level_name,
+                        normalized.node_type_names, base_path=path.parent,
+                        source_path=path, conventions=REDFISH.conventions)
 print(dump_tosca_yaml(build_tosca_document(result.data_types, result.node_types,
-                                           result.imports or None)))
+                                           imports=result.imports or None)))
 ```
 
 ### YANG

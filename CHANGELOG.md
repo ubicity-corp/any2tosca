@@ -37,6 +37,19 @@ What changed in each release, and what to do about it.
 - **Untyped definitions derive from `string`.** A definition with no `type`
   and no structure (any JSON value) becomes a data type derived from `string`,
   as an untyped property already was, instead of an empty data type.
+- **Redfish rules for Redfish only.** Versioned schema families (the latest
+  `Name.vX_Y_Z` as the base type, one capability file per family), the
+  `redfish.dmtf.org` file-root heuristic, and the `Links`/`Actions` expansion
+  apply under `redfish2tosca` only. `any2tosca` on Redfish schema files now
+  converts them as plain JSON Schema; use `redfish2tosca` for Redfish.
+- **`--extension-metadata` works for Redfish.** The Redfish normalizer keeps
+  `x-` keywords.
+- **Python API: input formats and conventions.** `any2tosca.formats` holds the
+  formats the commands use (`JSON_SCHEMA`, `OPENAPI`, `KUBERNETES`, `REDFISH`,
+  `YANG`), each with its loader, normalizers and `Conventions`.
+  `convert_schema(..., conventions=Conventions(relationship_model, redfish,
+  extension_metadata))` converts with a format's conventions; without them it
+  uses `links` and no Redfish rules.
 - **`oas2tosca` now defaults to `value`.** Its output no longer has
   capabilities, requirements, `_caps.yaml` files or a `Core.yaml` import, and
   data types holding a node type's schema stay data types. Pass

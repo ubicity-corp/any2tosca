@@ -109,9 +109,9 @@ as a list entry, which a schema definition does not allow.
 
 ### Relationship model
 
-By-value references are one of several Redfish conventions that `convert_schema`
-applies to every input today. They all become one converter option,
-`relationship_model`:
+By-value references are one of several conventions of the Redfish model of
+references. They are switched together by the relationship model,
+`Conventions.relationship_model` (`docs/generalization.md`):
 
 | Behaviour | `links` | `value` |
 |---|---|---|
@@ -122,9 +122,12 @@ applies to every input today. They all become one converter option,
 | Every node type gets a type-specific `Containable` capability | yes | no |
 | `Core.yaml` imported under namespace `core` | yes | no |
 | `<unit>_caps.yaml` written with the capability types | yes | no |
-| Redfish `Links` and `Actions` properties expanded into requirements and an interface | yes | no: ordinary properties |
 
-`links` is today's behaviour, unchanged, and the default of `any2tosca`,
+The expansion of Redfish's `Links` and `Actions` properties into requirements
+and an interface belongs to the Redfish rules (`Conventions.redfish`), which only
+`redfish2tosca` enables.
+
+`links` is the default of `any2tosca`,
 `redfish2tosca` and `yang2tosca`. `value` is the default of `oas2tosca`. Each CLI
 takes `--relationship-model links|value` to override its default. The by-value
 pre-pass runs when the model is `value`.
@@ -133,8 +136,8 @@ pre-pass runs when the model is `value`.
 
 ## Extensions to metadata
 
-A converter option, `extension_metadata`, lists vendor extension keys (`x-...`) to
-copy into TOSCA `metadata`:
+A convention, `Conventions.extension_metadata`, lists vendor extension keys
+(`x-...`) to copy into TOSCA `metadata`:
 
 - from a definition schema into the type's `metadata`,
 - from a property schema into the property's `metadata`.
