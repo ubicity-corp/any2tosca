@@ -255,9 +255,9 @@ unit. The Kubernetes profile does not use them, so they must become options befo
 
 ## Relation to the Kubernetes profile
 
-The backlog entry *Kubernetes profile: finish v2.0 migration + `in_range` fix via
-`any2tosca`* lists what `oas2tosca` does that `any2tosca` must reproduce. This
-design covers two of the items:
+`oas2tosca`, the separate tool that generated the Kubernetes profile before
+`any2tosca` did, had five features `any2tosca` had to reproduce. This design
+covers two of them:
 
 | oas2tosca feature | Covered by |
 |---|---|
