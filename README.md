@@ -9,10 +9,11 @@ truth rather than written by hand. The generated types can then be checked
 with [tosca-core](https://github.com/ubicity-corp/tosca-core), the open-source
 TOSCA parser and validator.
 
-| Command | Input format |
+| Command | Input |
 |---|---|
 | `any2tosca` | [JSON Schema](https://json-schema.org/) |
 | `oas2tosca` | [OpenAPI](https://www.openapis.org/) 2.0 / 3.x |
+| `oas2tosca --kubernetes` | the [Kubernetes](https://kubernetes.io/) OpenAPI specification |
 | `redfish2tosca` | [Redfish](https://www.dmtf.org/standards/redfish) JSON Schema |
 | `yang2tosca` | [YANG](https://datatracker.ietf.org/doc/html/rfc7950) modules |
 
@@ -76,14 +77,6 @@ any2tosca needs Python 3.10 or later:
 pip install any2tosca
 ```
 
-For development, install from a checkout with the test tools:
-
-```bash
-git clone https://github.com/ubicity-corp/any2tosca
-cd any2tosca
-pip install -e ".[dev]"
-```
-
 ## Usage
 
 Each command takes input files or directories and writes one TOSCA file per
@@ -102,15 +95,41 @@ yang2tosca server.yang -o tosca/
 | `-o DIR`, `--output DIR` | the output directory (default: `tosca/`) |
 | `-I DIR`, `--include-dir DIR` | another directory to search for referenced schema files; repeatable |
 | `-v`, `--verbose` | list the types as they are converted |
+| `--profile NAME:VERSION` | also package the output as a profile (see [Output as a profile](#output-as-a-profile)) |
+| `--relationship-model links\|value` | how references to node types are converted (see [Relationship models](#relationship-models)); the default is `links` for `redfish2tosca` and `value` for the others |
 | `--extension-metadata KEY` | copy schema key `KEY` (typically a vendor extension, `x-...`) into the `metadata` of the type or property it appears on; repeatable |
-| `--relationship-model links\|value` | how references to node types are converted (see [What it generates](#what-it-generates)); the default is `links` for `redfish2tosca` and `value` for the others |
-| `--profile NAME:VERSION` | also write `profile.yaml`, importing every file the run writes in dependency order, and `TOSCA.meta`, so the output directory is a profile; a warning names any imported file the run did not write (such as `Core.yaml`) |
+
+### Several files
 
 A schema that references another file becomes a TOSCA file that imports the
 other one's output, by `url` and with a `namespace`. Referenced files are
 looked for beside the input file first, then in each `-I` directory. TOSCA does
 not allow circular imports, so reference cycles between files are broken
 during conversion ([docs/circular-import-algorithm.md](docs/circular-import-algorithm.md)).
+
+### Output as a profile
+
+`--profile NAME:VERSION` also writes `profile.yaml`, which declares the profile
+and imports every file the run writes in dependency order, and a `TOSCA.meta`
+that names it as the entry definitions. The output directory is then a
+profile that can be validated and onboarded as a whole. A warning names any
+file the output imports but the run did not write, such as the `Core.yaml` of
+the `links` relationship model; place it beside `profile.yaml`.
+
+```bash
+yang2tosca models/ --profile com.example.network:1.0 -o profile/
+```
+
+[tosca-core](https://github.com/ubicity-corp/tosca-core) checks the result
+against TOSCA's rules:
+
+```bash
+pip install tosca-core
+tosca-validate profile/
+```
+
+Without `--profile`, the generated files declare no profile name and are meant
+to be imported by a profile or service template of your own.
 
 ### Splitting one input into several files
 
@@ -150,40 +169,33 @@ other in a cycle, are errors. See [docs/multi-output.md](docs/multi-output.md).
 
 ## What it generates
 
-- **Data types** for objects, enumerations and constrained scalars. Object
-  types are derived from a parent only where the schema names one (a single
-  `$ref` in `allOf`, `anyOf` or `oneOf`); scalars derive from their TOSCA
-  primitive type.
-- **Node types** for the schemas that describe resources, as each format
-  identifies them: OpenAPI request bodies of `POST` operations on paths that
-  also support `GET`, the Redfish
-  resource a schema file defines, and top-level YANG containers and lists.
-  Plain JSON Schema produces data types only. A node-type property marked
-  `readOnly: true`, a value the system sets rather than one the template
-  supplies, becomes an **attribute** instead of a property.
-- **Capabilities and requirements** that let node types be connected, under
-  the `links` relationship model (the default of `redfish2tosca`). Every node
-  type gets a `feature` and a `containable`
-  capability, whose types are written to a companion file, `<name>_caps.yaml`,
-  so that other files can target the node type without importing it. A
-  property whose value is another node type becomes a requirement, with a
-  `Contains` or `DependsOn` relationship.
-- **Embedded values** under the `value` relationship model (the default of
-  `any2tosca`, `oas2tosca` and `yang2tosca`), where a reference to a schema embeds a value of that schema
-  rather than linking to another resource. A property whose schema is a node
-  type's schema gets a companion data type, `<Name>Value`, with the same
-  properties as the node type `<Name>`. No capabilities, requirements or
-  `Core.yaml` import are generated.
+- **Data types** for objects, enumerations and constrained scalars. An object
+  type derives from a parent only where the schema names one (a single `$ref`
+  in `allOf`, `anyOf` or `oneOf`); a scalar type derives from its TOSCA
+  primitive type, and a schema that accepts any JSON value derives from
+  `string`.
+- **Node types** for the schemas that describe resources, as each
+  [input format](#input-formats) identifies them. Plain JSON Schema produces
+  data types only.
+- **Attributes** for node-type properties marked `readOnly: true`: values the
+  system sets rather than ones a template supplies. In data types they stay
+  properties.
+- **Property names as the schema spells them**, including `-` and `.`. Type
+  names have spaces, `-` and `.` replaced by `_`.
 
-For example, an OpenAPI document whose `POST /servers` takes a `Server`, and
-whose `GET /servers` lists them, produces, with `--relationship-model links`:
+### Relationship models
+
+A schema can refer to a node type's schema in two ways, and
+`--relationship-model` chooses how such references are converted.
+
+**`value`** (the default of `any2tosca`, `oas2tosca` and `yang2tosca`): a
+reference embeds a value of the referenced schema. A property whose schema is
+a node type's schema is typed with a companion data type, `<Name>Value`, with
+the same properties as the node type `<Name>`. For an OpenAPI document whose
+`POST /servers` takes a `Server` and whose `GET /servers` lists them, `oas2tosca`
+writes:
 
 ```yaml
-imports:
-- url: Core.yaml
-  namespace: core
-- url: servers_caps.yaml
-  namespace: srvrscps
 node_types:
   Server:
     properties:
@@ -197,6 +209,32 @@ node_types:
           $greater_or_equal:
           - $value
           - 1
+    attributes:
+      state:
+        type: string
+```
+
+**`links`** (the default of `redfish2tosca`): a reference to another resource
+is a relationship. A property whose value is another node type becomes a
+requirement, with a `Contains` or `DependsOn` relationship, and every node type
+gets a `feature` and a `containable` capability that requirements can target.
+The capability types are written to a companion file, `<name>_caps.yaml`, so
+that other files can target a node type without importing it. The same
+document with `--relationship-model links`:
+
+```yaml
+imports:
+- url: Core.yaml
+  namespace: core
+- url: servers_caps.yaml
+  namespace: srvrscps
+node_types:
+  Server:
+    properties:
+      ...                      # as above
+    attributes:
+      state:
+        type: string
     capabilities:
       feature:
         type: srvrscps:ServerFeature
@@ -206,10 +244,10 @@ node_types:
 
 ### The base types: `Core.yaml`
 
-Node types build on four base types that any2tosca does not generate: the
-`Feature` and `Containable` capability types and the `Contains` and
-`DependsOn` relationship types. Output with node types under the `links`
-relationship model imports them from a `Core.yaml` beside it, which you provide:
+Under the `links` model, node types build on four base types that any2tosca
+does not generate: the `Feature` and `Containable` capability types and the
+`Contains` and `DependsOn` relationship types. The output imports them from a
+`Core.yaml` beside it, which you provide:
 
 ```yaml
 tosca_definitions_version: tosca_2_0
@@ -224,43 +262,11 @@ capability_types:
 Importing these types from a named profile instead, with an option to choose
 the profile, is planned.
 
-## Using the output
+## Input formats
 
-The generated files are TOSCA type definitions. They declare no `profile:`
-name, so they are used in one of two ways:
+### JSON Schema
 
-- **Imported** by a profile or service template of your own, through an
-  `imports` entry with the file's `url`.
-- **As a profile of their own:** add a `profile:` line naming it (for
-  example `profile: com.example.servers:1.0`) to the main file, and it can be
-  validated and onboarded as a profile.
-
-[tosca-core](https://github.com/ubicity-corp/tosca-core) checks the result
-against TOSCA's rules. A single file with a `profile:` line is validated
-directly:
-
-```bash
-pip install tosca-core
-tosca-validate tosca/server.yaml
-```
-
-Output of several files (node types, their `_caps.yaml` and `Core.yaml`) is
-validated as a directory holding them, with a `TOSCA.meta` that names the main
-file:
-
-```
-TOSCA-Meta-File-Version: 1.1
-CSAR-Version: 2.0
-Created-By: any2tosca
-Entry-Definitions: servers.yaml
-```
-
-An option that writes the `profile:` line, and packages the output as a CSAR,
-is planned.
-
-## Conversion reference
-
-### JSON Schema → TOSCA
+`any2tosca` converts plain JSON Schema:
 
 | JSON Schema | TOSCA |
 |---|---|
@@ -270,43 +276,41 @@ is planned.
 | `type: boolean` | `type: boolean` |
 | `type: object` | `data_type` with `properties` |
 | `type: array` | `type: list` with `entry_schema` |
+| no `type`, no structure | `data_type` derived from `string` |
 | `properties` | `properties` |
 | `required` | `required: true/false` per property |
 | `default` | `default` |
 | `description` / `title` | `description` (folded block style) |
+| `readOnly: true` (node types) | attribute |
 | `minimum` / `maximum` | `$greater_or_equal` / `$less_or_equal` |
-| `exclusiveMinimum/Maximum` | `$greater_than` / `$less_than` |
-| `minLength` / `maxLength` | `$min_length` / `$max_length` |
+| `exclusiveMinimum` / `exclusiveMaximum` | `$greater_than` / `$less_than` |
+| `minLength` / `maxLength` | `$greater_or_equal` / `$less_or_equal` on `$length: [$value]` |
+| `pattern` | `$matches` |
 | `enum` | `$valid_values` |
-| `pattern` | `$pattern` |
 | `items` | `entry_schema` |
-| `additionalProperties` | `entry_schema` |
-| `$ref` (local) | resolved inline |
-| `$ref` (external file) | `namespace:TypeName` + `imports` entry |
-| `allOf` with single `$ref` | `derived_from` |
+| `additionalProperties` | `type: map` with `entry_schema` |
+| `$ref` (local) | the referenced type, by name |
+| `$ref` (external file) | `namespace:TypeName` and an `imports` entry |
+| `allOf` with a single `$ref` | `derived_from` |
 | `allOf` with mixed schemas | merged properties |
-| `anyOf` / `oneOf` with null alternative | flattened to non-null member |
-| `anyOf` / `oneOf` with single `$ref` | `derived_from` |
-| `anyOf` / `oneOf` with versioned `$refs` (same base name) | highest version → `derived_from` |
-| `anyOf` / `oneOf` with versioned + unversioned `$refs` | highest versioned → `derived_from`, unversioned properties merged |
-| `anyOf` / `oneOf` with multiple unversioned `$refs` | first `$ref` → `derived_from`, rest merged |
+| `anyOf` / `oneOf` with a `null` alternative | the non-null member |
+| `anyOf` / `oneOf` with a single `$ref` | `derived_from` |
+| `anyOf` / `oneOf` with several `$ref`s | first `$ref` → `derived_from`, the others' properties merged |
 | `definitions` / `$defs` | top-level `data_types` entries |
 
 [docs/jsonschema.md](docs/jsonschema.md) is a reference to the JSON Schema
 keywords themselves.
 
-### OpenAPI → TOSCA
+### OpenAPI
 
 `oas2tosca` converts the schemas of an OpenAPI 2.0 (`definitions`) or 3.x
 (`components.schemas`) document with the JSON Schema rules above. A schema
 used as the request body of a `POST` to a path that also supports `GET`, a
 resource the API creates and can return, becomes a node type; the rest become
 data types. A schema posted only to a path without `GET` is a request to
-perform an action, and becomes a data type. References are converted by
-value (the `value` relationship model): a property whose schema is a node
-type's schema is typed with the companion data type `<Name>Value`.
+perform an action, and becomes a data type.
 
-### Kubernetes → TOSCA
+### Kubernetes
 
 `oas2tosca --kubernetes` converts the Kubernetes OpenAPI specification
 (`api/openapi-spec/swagger.json` in the Kubernetes repository) into one TOSCA
@@ -314,7 +318,7 @@ file per GA API group, plus the shared `meta`, `resource`, `runtime` and
 `intstr` packages and the `apiextensions` and `apiregistration` APIs:
 
 ```bash
-oas2tosca --kubernetes swagger.json --profile io.kubernetes:1.35 -o io/kubernetes/1.35/
+oas2tosca --kubernetes swagger.json --profile io.kubernetes:1.37 -o io/kubernetes/1.37/
 ```
 
 - Alpha and beta versions and the `*List` kinds are left out. The packaged
@@ -334,18 +338,25 @@ oas2tosca --kubernetes swagger.json --profile io.kubernetes:1.35 -o io/kubernete
 
 Design: [docs/kubernetes.md](docs/kubernetes.md).
 
-### Redfish → TOSCA
+### Redfish
 
 `redfish2tosca` first normalizes a Redfish schema into plain JSON Schema,
-dropping OData annotations and flattening nullable alternatives, then converts
-it. The resource a schema file defines becomes a node type; a family of
-versioned schemas (`Drive.v1_13_0.json`, `Drive.v1_14_0.json`, ...) becomes a
-chain of `derived_from` types; `Links` become `DependsOn` requirements; and
-`Actions` become an interface type. These Redfish rules apply under
-`redfish2tosca` only; `any2tosca` converts the same files as plain JSON Schema.
+dropping OData annotations, flattening nullable alternatives and promoting
+`x-longDescription` to `description`, then converts it with the Redfish rules:
+
+- The resource a schema file defines becomes a node type.
+- A family of versioned schemas (`Drive.v1_13_0.json`, `Drive.v1_14_0.json`, ...)
+  becomes a chain of `derived_from` types: an `anyOf` / `oneOf` of versioned
+  `$ref`s derives from the highest version, with the properties of unversioned
+  members merged in. All versions share one capability file (`Drive_caps.yaml`).
+- `Links` become `DependsOn` requirements, and `Actions` become an interface
+  type.
+
+These rules apply under `redfish2tosca` only; `any2tosca` converts the same
+files as plain JSON Schema.
 [docs/redfish-conversion.md](docs/redfish-conversion.md) describes every step.
 
-### YANG → TOSCA
+### YANG
 
 | YANG | TOSCA |
 |---|---|
@@ -357,12 +368,13 @@ chain of `derived_from` types; `Links` become `DependsOn` requirements; and
 | `leaf` | scalar property |
 | `leaf-list` | `list` property |
 | `grouping` / `uses` | inlined by pyang before conversion |
-| `enumeration` | `$valid_values` constraint |
+| `enumeration` | `$valid_values` |
 | `range` | `$greater_or_equal` / `$less_or_equal` |
-| `length` | `$min_length` / `$max_length` |
-| `pattern` | `$pattern` |
+| `length` | `$greater_or_equal` / `$less_or_equal` on `$length: [$value]` |
+| `pattern` | `$matches` |
 | `mandatory true` | `required: true` |
-| Named typedef ref | `$ref` → resolved `data_type` |
+| named typedef reference | the typedef's `data_type`, by name |
+| `leafref` | `string` |
 
 YANG integer types (`int8`–`int64`, `uint8`–`uint64`) map to TOSCA `integer`;
 `decimal64` maps to `float`; all string-like types map to `string`.
@@ -373,93 +385,52 @@ YANG integer types (`int8`–`int64`, `uint8`–`uint64`) map to TOSCA `integer`
   `multipleOf`, `minItems` / `maxItems`, `uniqueItems`, `patternProperties`,
   `if` / `then` / `else`, `not`, `writeOnly`, and OpenAPI's `discriminator`.
   The values they constrain are converted; the constraints they add are not.
-  `readOnly` is converted on node types only (see
-  [What it generates](#what-it-generates)); in data types it is left out.
+  `readOnly` is converted on node types only.
+- **Unions:** an `anyOf` / `oneOf` of several `$ref`s becomes one type, so the
+  choice between the alternatives is lost. Written inline in a property, the
+  type also loses the first alternative's properties.
 - **Kubernetes `IntOrString`:** TOSCA has no union type, so `IntOrString`
   fields are strings and do not take an integer value.
 
 ## Python API
 
-Each command is also available from Python. These functions and classes are
-not yet a stable API: they may change in any release before 1.0.
-
-### JSON Schema
-
-```python
-import json
-from pathlib import Path
-from any2tosca import convert_schema, build_tosca_document
-from any2tosca.yaml_utils import dump_tosca_yaml
-
-with open("my_schema.json") as f:
-    root_schema = json.load(f)
-
-result = convert_schema(root_schema, "MyType",
-                        base_path=Path("my_schema.json").parent)
-tosca_doc = build_tosca_document(result.data_types, result.node_types,
-                                 imports=result.imports or None)
-print(dump_tosca_yaml(tosca_doc))
-```
-
-### OpenAPI
-
-Each format in `any2tosca.formats` (`JSON_SCHEMA`, `OPENAPI`, `KUBERNETES`,
-`REDFISH`, `YANG`) loads and normalizes an input file and carries the
-conventions its command converts with:
+Each command is also available from Python. Every input format in
+`any2tosca.formats` (`JSON_SCHEMA`, `OPENAPI`, `KUBERNETES`, `REDFISH`, `YANG`)
+loads and normalizes an input file and carries the conventions its command
+converts with, so the same code converts any of them as the command does:
 
 ```python
 from pathlib import Path
 from any2tosca import convert_schema, build_tosca_document
 from any2tosca.companions import add_value_companions
-from any2tosca.formats import OPENAPI
+from any2tosca.formats import OPENAPI   # or JSON_SCHEMA, REDFISH, YANG
 from any2tosca.yaml_utils import dump_tosca_yaml
 
-path = Path("openapi.json")
-normalized = OPENAPI.normalize(OPENAPI.load(path), path)
-# OpenAPI converts references by value: point them at <Name>Value data types.
-root_schema = add_value_companions(normalized.root_schema, normalized.node_type_names)
+fmt, path = OPENAPI, Path("servers.yaml")
+normalized = fmt.normalize(fmt.load(path), path)
+root_schema = normalized.root_schema
+if fmt.conventions.relationship_model == "value":
+    # References embed values: point those to node-type schemas at <Name>Value types.
+    root_schema = add_value_companions(root_schema, normalized.node_type_names)
 result = convert_schema(root_schema, normalized.top_level_name, normalized.node_type_names,
-                        conventions=OPENAPI.conventions)
-print(dump_tosca_yaml(build_tosca_document(result.data_types, result.node_types)))
+                        base_path=path.parent, source_path=path,
+                        conventions=fmt.conventions)
+print(dump_tosca_yaml(build_tosca_document(
+    result.data_types, result.node_types, result.relationship_types or None,
+    result.interface_types or None, imports=result.imports or None)))
 ```
 
-### Redfish
+Under the `links` model, `result.capability_types` holds the capability types
+for `result.caps_file`; `any2tosca.converter.build_caps_document` builds that file's document.
+The Kubernetes format also splits its input; `any2tosca.split.split_schema`
+does that, as `oas2tosca --kubernetes` does. These functions and classes are
+not yet a stable API: they may change in any release before 1.0.
 
-```python
-from pathlib import Path
-from any2tosca import convert_schema, build_tosca_document
-from any2tosca.formats import REDFISH
-from any2tosca.yaml_utils import dump_tosca_yaml
-
-path = Path("SimpleServer.v1_0_1.json")
-normalized = REDFISH.normalize(REDFISH.load(path), path)
-# The Redfish conventions: links between resources, versioned schema families.
-result = convert_schema(normalized.root_schema, normalized.top_level_name,
-                        normalized.node_type_names, base_path=path.parent,
-                        source_path=path, conventions=REDFISH.conventions)
-print(dump_tosca_yaml(build_tosca_document(result.data_types, result.node_types,
-                                           imports=result.imports or None)))
-```
-
-### YANG
-
-```python
-from pathlib import Path
-from any2tosca.yang import YANGNormalizer
-from any2tosca import convert_schema, build_tosca_document
-from any2tosca.yaml_utils import dump_tosca_yaml
-
-yang_path = Path("server.yang")
-normalizer = YANGNormalizer()
-root_schema, node_type_names = normalizer.normalize(yang_path)
-result = convert_schema(root_schema, normalizer.module_name, node_type_names,
-                        base_path=yang_path.parent)
-print(dump_tosca_yaml(build_tosca_document(result.data_types, result.node_types)))
-```
-
-## Running tests
+## Development
 
 ```bash
+git clone https://github.com/ubicity-corp/any2tosca
+cd any2tosca
 pip install -e ".[dev]"
 pytest
 ```
