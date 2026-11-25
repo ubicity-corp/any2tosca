@@ -274,17 +274,11 @@ capabilities and requirements, lifecycle wiring) are outside this design.
 
 ## Open questions
 
-- **Name clash between API groups and library packages.** Unit names come from the
-  rules, so two prefixes can map to the same unit by accident. Check the 1.35
-  spec, for example, for an `io.k8s.api.resource.v1` group (dynamic resource
-  allocation) next to `io.k8s.apimachinery.pkg.api.resource` (`Quantity`, today's
-  `resource.yaml`). The collision check catches clashing type names, not an
-  unintended merge of two prefixes that share no type names. A `--list-units`
-  dry run that prints each unit with the prefixes feeding it would make such
-  merges visible.
-- **`*List` kinds.** The Kubernetes OpenAPI gives list kinds (`DeploymentList`)
-  their own group-version-kind, and their `items` reference node types, so the
-  converter would promote them to node types with requirements. The published
-  profile has none. Whether they are skipped in the rules (`(?<!List)$`) or by the
-  Kubernetes normalizer belongs to that design. Recording it here because the
-  rules are the cheaper place.
+- **Unintended merges.** Unit names come from the rules, so two prefixes can map
+  to the same unit by accident. The Kubernetes rules avoid one such case by naming
+  the `resource.k8s.io` group `dra` (it would otherwise share `resource` with
+  `io.k8s.apimachinery.pkg.api.resource`;
+  see [Kubernetes conversion](kubernetes.md#split-rules)). The collision check
+  catches clashing type names, not a merge of two prefixes that share none. A
+  `--list-units` dry run that prints each unit with the prefixes feeding it would
+  make such merges visible.
