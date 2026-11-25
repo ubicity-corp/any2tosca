@@ -1,370 +1,102 @@
-# Kubernetes Conversion
-
-**Status:** Implemented (`oas2tosca --kubernetes`), and compared with the 1.35
-baseline (see [Baseline comparison (1.35)](#baseline-comparison-135)).
+# Converting the Kubernetes specification
 
 `oas2tosca --kubernetes` converts the Kubernetes OpenAPI specification
-(`api/openapi-spec/swagger.json` in the Kubernetes repository) into the generated
-part of the Kubernetes profile (`io.kubernetes:<minor release>`): one TOSCA 2.0
-file per API group, packaged as one profile, with node types for the API
-resources and data types for everything else.
+(`api/openapi-spec/swagger.json` in the Kubernetes repository, for the release
+you want) into a TOSCA profile of Kubernetes resource types: one file per API
+group, node types for the resources and data types for everything else.
 
-It builds on [multi-output conversion](multi-output.md), which supplies the
-per-group files and the profile packaging. This document covers the rest: which
-schemas become node types, how references between resources are converted, which
-Kubernetes extensions reach the output, and the Kubernetes-specific adjustments to
-resource types.
+```bash
+oas2tosca --kubernetes swagger.json --profile io.kubernetes:1.37 -o io/kubernetes/1.37/
+```
 
-`any2tosca` produces the generated part of the profile in one step
-(`GENERATING.md` in the profile, Part 1), replacing `oas2tosca` output plus the
-hand edits that converted it to TOSCA 2.0 and fixed it. The separate `oas2tosca`
-repository is deleted once the published profile is regenerated.
+`--kubernetes` takes exactly one input file. It is the same as `oas2tosca` with:
 
-The numbers below are from the 1.37 specification, the current stable release:
-862 definitions, 203 of them carrying `x-kubernetes-group-version-kind`. The 1.35
-specification, from which the published profile was generated, gives the same
-results with smaller counts.
+- `--split` set to the packaged rules,
+  [any2tosca/rules/kubernetes.yaml](../any2tosca/rules/kubernetes.yaml); an
+  explicit `--split RULES` replaces them;
+- `--allow-skipped-refs`;
+- `--extension-metadata` for the four `x-kubernetes-*` keys below;
+- the `value` relationship model, which it requires;
+- the resource adjustments below, applied after the OpenAPI schemas are read.
 
----
+## Files
 
-## Design overview
+The packaged rules ([splitting.md](splitting.md) describes rules) write:
 
-Most of the work is general OpenAPI behaviour, used by every OpenAPI conversion.
-A small Kubernetes module supplies only what depends on Kubernetes conventions.
+| File | Schemas |
+|---|---|
+| `meta.yaml` | `io.k8s.apimachinery.pkg.apis.meta.v1` (`ObjectMeta`, `LabelSelector`, ...) |
+| `resource.yaml` | `io.k8s.apimachinery.pkg.api.resource` (`Quantity`) |
+| `runtime.yaml` | `io.k8s.apimachinery.pkg.runtime` (`RawExtension`) |
+| `intstr.yaml` | `io.k8s.apimachinery.pkg.util.intstr` (`IntOrString`) |
+| `<group>.yaml` | every GA API group: `io.k8s.api.<group>.v1` (`core.yaml`, `apps.yaml`, `batch.yaml`, ...) |
+| `dra.yaml` | the `resource.k8s.io` group (`io.k8s.api.resource.v1`), named so it does not share `resource.yaml` |
+| `autoscaling.yaml` | `autoscaling` `v2`, and `Scale` from `v1`; `v1`'s `HorizontalPodAutoscaler` is left out |
+| `apiextensions.yaml` | `CustomResourceDefinition` |
+| `apiregistration.yaml` | `APIService` |
 
-| Piece | Where | Kubernetes-specific? |
-|---|---|---|
-| [Node types: resources you can create and read back](#node-types) | `OpenAPIExtractor` | No |
-| [References are by value](#references-are-by-value) | Schema pre-pass and `Converter` option, the default for OpenAPI | No |
-| [Extensions copied to metadata](#extensions-to-metadata) | `Converter` | No (Kubernetes picks the list) |
-| [`readOnly` properties become attributes](#readonly-becomes-attribute) | `Converter` | No |
-| [Split rules for API groups](#split-rules) | `any2tosca/rules/kubernetes.yaml` | Yes |
-| [Resource adjustments](#resource-adjustments) | `KubernetesNormalizer` | Yes |
+Alpha and beta versions, the `*List` kinds and `io.k8s.apimachinery.pkg.version`
+are left out. A type name is the last segment of the schema name
+(`io.k8s.api.apps.v1.Deployment` → `Deployment`). With `--profile`, `profile.yaml`
+imports every file, each after the files it imports.
 
----
+A GA field whose type is an alpha or beta type falls back to its JSON type
+(`map`, `string`, ...), with a warning naming the schema.
 
 ## Node types
 
-**Rule:** a schema becomes a node type when it is the body of a `POST` to a path
-that also supports `GET`. That is a resource collection: clients create entries in
-it and read them back. A schema posted only to a path with no `GET` is a request
-to perform an action, not a resource, and becomes a data type.
+A schema becomes a node type when the specification creates it with a `POST`
+to a path that also supports `GET`: a resource collection. A schema posted only
+to a path without `GET` is a request to perform an action and becomes a data
+type: `Binding`, `Eviction` and `TokenRequest` (subresources), and the access
+reviews. `Scale` is a data type too.
 
-This is a general change to `OpenAPIExtractor`, which today takes every `POST`
-body. It applies to every OpenAPI conversion, with or without `--kubernetes`.
+Each resource node type:
 
-The 1.37 numbers:
+- carries its `x-kubernetes-group-version-kind` as metadata, as a map:
 
-- 101 schemas are `POST` bodies. Every one carries a group-version-kind, and none
-  is a `*List` kind.
-- 9 of the 101 are posted only to action paths: `Binding`, `Eviction` and
-  `TokenRequest` (the `binding`, `eviction` and `token` subresources), and
-  `SelfSubjectReview`, `TokenReview`, `LocalSubjectAccessReview`,
-  `SelfSubjectAccessReview`, `SelfSubjectRulesReview` and `SubjectAccessReview`.
-  The rule makes them data types.
-- The remaining 92 are the resource kinds.
+  ```yaml
+  metadata:
+    x-kubernetes-group-version-kind:
+      group: apps          # '' for the core group
+      kind: Deployment
+      version: v1
+  ```
 
-Group-version-kind is **not** used to pick node types. It also appears on the 95
-`*List` kinds, on `DeleteOptions` and `WatchEvent` (each with one group-version-kind
-entry per API group), and on `Scale`, `Status`, `APIGroup`, `APIVersions` and
-`ComponentStatus`. None of these is a resource a template deploys. `oas2tosca`
-uses request bodies as well, not group-version-kind. It logs the extension and
-does not act on it.
+  A schema the specification gives several group-version-kinds (`DeleteOptions`,
+  `WatchEvent`) keeps them as a list;
+- has no `apiVersion` or `kind` property, since the type determines both;
+- declares `status` as an attribute, since Kubernetes sets it.
 
----
+## Metadata from extensions
 
-## References are by value
-
-In OpenAPI a `$ref` embeds the referenced schema's value: the JSON at that
-position *is* an instance of the schema. The converter instead treats a reference
-to a node-type schema as a relationship. A data type with such a property is
-promoted to a node type, and the property becomes a requirement. That follows the
-Redfish model, where a reference to another resource is a link (`@odata.id`).
-
-For OpenAPI input, references are by value:
-
-- A property that references a node-type schema stays a property. Its type is a
-  **companion data type**: a data type generated from the same schema as the
-  node type, named `<Kind>Value`. It is generated only when such a reference
-  exists, in the same unit as the node type.
-- No data type is promoted to a node type because of the properties it holds.
-
-Companions are made by a **pre-pass over the schema**, before the split and
-before conversion. References from definitions that the split rules skip do not
-count, so the skipped `*List` kinds create no companions. For every other `$ref`
-to a node-type schema, except one in the `allOf` of another node-type schema
-(which is inheritance), the pre-pass adds a
-definition named after the node-type definition with `Value` appended
-(`io.k8s.api.core.v1.PersistentVolumeClaimValue`), a copy of the node-type schema,
-and points the `$ref` at it. References inside a companion are processed the
-same way, so a companion's base is the base's companion. A companion name that
-already exists as a definition is an error. After the pre-pass, no kept schema
-references a node-type schema by value. The split rules place
-the companion with its node type, because both names share the same prefix.
-
-In 1.37 the one case outside the `*List` kinds is `StatefulSetSpec.volumeClaimTemplates`,
-a list of `PersistentVolumeClaim`. It becomes `entry_schema: core:PersistentVolumeClaimValue`.
-The published profile has `entry_schema: core:PersistentVolumeClaim`, a node type
-as a list entry, which a schema definition does not allow.
-
-### Relationship model
-
-By-value references are one of several conventions of the Redfish model of
-references. They are switched together by the relationship model,
-`Conventions.relationship_model` (`docs/generalization.md`):
-
-| Behaviour | `links` | `value` |
+| Extension | On | Meaning |
 |---|---|---|
-| A property of a node type that references a node type becomes a requirement | yes | never arises: the pre-pass leaves no such reference |
-| A data type holding such a property is promoted to a node type | yes | never arises, as above |
-| A data type derived from a node type becomes a node type with `Feature` and `Containable` capabilities | yes | never arises: the pre-pass points the base at `<Kind>Value` |
-| Every node type gets a type-specific `Feature` capability | yes | no |
-| Every node type gets a type-specific `Containable` capability | yes | no |
-| `Core.yaml` imported under namespace `core` | yes | no |
-| `<unit>_caps.yaml` written with the capability types | yes | no |
+| `x-kubernetes-group-version-kind` | node types | the resource's API group, version and kind |
+| `x-kubernetes-list-type` | list properties | `atomic`, `set` or `map`: how the list merges |
+| `x-kubernetes-list-map-keys` | list properties | the keys that identify an entry of a `map` list |
+| `x-kubernetes-map-type` | map properties | `atomic` or `granular`: how the map merges |
 
-The expansion of Redfish's `Links` and `Actions` properties into requirements
-and an interface belongs to the Redfish rules (`Conventions.redfish`), which only
-`redfish2tosca` enables.
+Other `x-kubernetes-*` extensions are not copied.
 
-`links` is the default of `redfish2tosca`; `value` is the default of
-`any2tosca`, `oas2tosca` and `yang2tosca` (`docs/generalization.md`, E). Each CLI
-takes `--relationship-model links|value` to override its default. The by-value
-pre-pass runs when the model is `value`.
+## Resources inside other schemas
 
----
+A schema that holds a resource as a value, such as a `StatefulSet`'s
+`volumeClaimTemplates` (a list of `PersistentVolumeClaim`), refers to a
+companion data type with the resource's properties, `<Kind>Value`
+(`core:PersistentVolumeClaimValue`). It is written to the same file as the
+resource.
 
-## Extensions to metadata
+## Values TOSCA cannot type
 
-A convention, `Conventions.extension_metadata`, lists vendor extension keys
-(`x-...`) to copy into TOSCA `metadata`:
+TOSCA has no union or `any` type. `IntOrString` derives from `string`, so its
+fields take quoted numbers (`"8080"`). A schema that accepts any JSON value
+derives from `string`. Integer formats (`int32`, `int64`) add no range check.
 
-- from a definition schema into the type's `metadata`,
-- from a property schema into the property's `metadata`.
+## A finished profile
 
-Values are copied as YAML values, not stringified. The published profile already
-uses list and map values in metadata (`x-kubernetes-list-map-keys: ['type']`), and
-it onboards.
-
-The Kubernetes list:
-
-| Extension | 1.37 uses | Placed on | Meaning |
-|---|---|---|---|
-| `x-kubernetes-group-version-kind` | 203 | node types | API group, version and kind of the resource |
-| `x-kubernetes-list-type` | 458 | list properties | `atomic`, `set` or `map`: how the list merges |
-| `x-kubernetes-list-map-keys` | 109 | list properties | the keys that identify an entry of a `map` list |
-| `x-kubernetes-map-type` | 47 | map properties | `atomic` or `granular`: how the map merges |
-
-`x-kubernetes-map-type` is new compared to `oas2tosca`. It is the map counterpart
-of `x-kubernetes-list-type`, and it is listed so that the merge semantics of every
-collection are described.
-
-Not copied: `x-kubernetes-patch-strategy` and `x-kubernetes-patch-merge-key`
-(strategic-merge-patch hints that `x-kubernetes-list-type` and
-`x-kubernetes-list-map-keys` supersede), and `x-kubernetes-unions`,
-`x-kubernetes-embedded-resource`, `x-kubernetes-int-or-string`,
-`x-kubernetes-preserve-unknown-fields` and `x-kubernetes-validations` (describing
-union members, embedded objects and server-side validation, none of which a TOSCA
-type expresses).
-
-The specification gives group-version-kind as a list. The normalizer replaces a
-one-entry list by its entry, so the metadata is a map, as in the published
-profile. Every node type has one entry; `DeleteOptions` and `WatchEvent`, data
-types with one entry per API group, keep the list. The core group is the empty string and is
-written as `group: ''`, a valid empty value, so it needs no hand fix.
-
----
-
-## `readOnly` becomes attribute
-
-A converter change for all input formats: a property of a node type whose schema
-has `readOnly: true` is emitted as an **attribute** instead of a property. Data
-types have no attributes, so in a data type it stays a property, as in a
-companion `<Kind>Value`. In JSON
-Schema, `readOnly` marks a value the server sets and the client does not supply,
-which is exactly a TOSCA attribute that is not a property. The converter emits no
-attributes today, and the README lists `readOnly` among the keywords it ignores.
-
-The Kubernetes specification does not mark anything `readOnly`. The normalizer
-sets it on the `status` property of every resource (see
-[Resource adjustments](#resource-adjustments)).
-
----
-
-## Split rules
-
-`any2tosca/rules/kubernetes.yaml`, shipped as a package resource:
-
-| Definitions | Unit | Notes |
-|---|---|---|
-| `io.k8s.apimachinery.pkg.apis.meta.v1.*` | `meta` | `ObjectMeta`, `LabelSelector`, ... |
-| `io.k8s.apimachinery.pkg.api.resource.*` | `resource` | `Quantity` |
-| `io.k8s.apimachinery.pkg.runtime.*` | `runtime` | `RawExtension` |
-| `io.k8s.apimachinery.pkg.util.intstr.*` | `intstr` | `IntOrString` |
-| `io.k8s.api.resource.v1.*` | `dra` | the `resource.k8s.io` group (dynamic resource allocation) |
-| `io.k8s.api.autoscaling.v1.HorizontalPodAutoscaler*`, `...v1.CrossVersionObjectReference` | skipped | superseded by `autoscaling/v2` |
-| `io.k8s.api.autoscaling.v1.*`, `io.k8s.api.autoscaling.v2.*` | `autoscaling` | |
-| `io.k8s.api.<group>.v1.*` | `<group>` | every other GA group |
-| `io.k8s.apiextensions-apiserver.pkg.apis.apiextensions.v1.*` | `apiextensions` | `CustomResourceDefinition` |
-| `io.k8s.kube-aggregator.pkg.apis.apiregistration.v1.*` | `apiregistration` | `APIService` |
-| any name ending in `List` | skipped | list responses, not deployable |
-| everything else | skipped | alpha and beta versions, `io.k8s.apimachinery.pkg.version.Info` |
-
-Rules are first-match, so the `List` and autoscaling rules come before the group
-rules. The type name is the last segment of the definition name.
-
-Two clashes in 1.37 decide rule order and unit names:
-
-- The `resource.k8s.io` group (`io.k8s.api.resource.v1`) and the apimachinery
-  `resource` package (`Quantity`) would both map to `resource`. The package keeps
-  `resource`, which existing profile files import as `resource:Quantity`, and the
-  group becomes `dra`.
-- `autoscaling` is the only group with two GA versions. `v2` holds the current
-  `HorizontalPodAutoscaler`; `v1` holds `Scale`, which exists only there. Both
-  versions go into one unit, with the five `v1` HPA definitions skipped.
-
-The same kind name in two groups (`Event` in `core` and `events`, `TokenRequest`
-in `authentication` and `storage`, `ResourceClaim` in `core` and `dra`) is not a
-clash: they land in different units.
-
-The rules cover every GA group: 19 in 1.35, 20 in 1.37. The published profile aggregates five (`core`,
-`apps`, `storage`, `networking`, `rbac`) and lists `batch` as remaining work.
-
----
-
-## Resource adjustments
-
-`KubernetesNormalizer` (`any2tosca/kubernetes.py`) runs after `OpenAPIExtractor`
-and before the split. On every definition it replaces a one-entry
-`x-kubernetes-group-version-kind` list by its entry. For each **node-type**
-schema it also:
-
-1. Removes the `apiVersion` and `kind` properties. The node type determines
-   both, and the group-version-kind metadata states them. Data types keep theirs:
-   in `ObjectReference` or `OwnerReference`, `kind` is a real field.
-2. Sets `readOnly: true` on the `status` property, so it becomes an attribute.
-
-The rest of the `Resource` base type (`GENERATING.md` Part 2, Step 2: the type
-itself and its `cluster` requirement) stays hand-written.
-
-The normalizer returns the extractor's `(root_schema, node_type_names)` modified,
-the same interface `RedfishNormalizer` has. It adds no node types of its own.
-
----
-
-## Command line
-
-```bash
-oas2tosca --kubernetes swagger.json --profile io.kubernetes:1.35 -o io/kubernetes/1.35/
-```
-
-`--kubernetes` sets:
-
-- `--split` to the packaged Kubernetes rules,
-- the relationship model to `value` (already the `oas2tosca` default),
-- `extension_metadata` to the four keys above,
-- `--allow-skipped-refs`: a GA type may reference alpha or beta types the rules
-  skip (in 1.37, `batch/v1` `JobSchedulingConfiguration` uses four
-  `scheduling.k8s.io/v1alpha3` types); such a field falls back to its JSON type,
-  with a warning,
-- `KubernetesNormalizer` after `OpenAPIExtractor`.
-
-It is an explicit flag rather than detection from the input, so that the output of
-a plain `oas2tosca` run never depends on what the document happens to contain.
-
----
-
-## What regeneration changes in the published profile
-
-Comparing the result of the new generator with the published profile:
-
-| Area | Change |
-|---|---|
-| Version | TOSCA 2.0 directly; Part 2, Step 1 goes away. |
-| `in_range` | Not emitted. The converter writes `minimum` and `maximum` as separate `$greater_or_equal` and `$less_or_equal` clauses. The published `$in_range` validations came from `oas2tosca` turning `format: int32` / `int64` into ranges; the converter ignores `format`, so they disappear. |
-| Empty values | `group: ''` instead of `group: {}`. |
-| `PersistentVolumeClaim` in `StatefulSetSpec` | Becomes `PersistentVolumeClaimValue`. |
-| Action requests | `Binding` becomes a data type; it is a node type in the published `core.yaml`. |
-| `PodTemplate` | Stays a node type (it is a resource collection). Part 2, Step 2 turns it into a data type by hand. |
-| Groups | Every GA group (19 at 1.35) instead of 5. |
-| `status` | An attribute, `apiVersion` and `kind` gone: the generated half of Part 2, Step 3. |
-
----
-
-## Testing
-
-- **Extractor:** a `POST` body on a path with `GET` is a node type; one on a
-  `POST`-only path is a data type; both for OpenAPI 2.0 body parameters and 3.x
-  `requestBody`. The existing fixtures in `tests/test_openapi.py` have `POST`-only
-  paths and gain a `GET`, so their node-type expectations still hold.
-- **By value:** a data type holding a node-type schema stays a data type and
-  references `<Kind>Value`; the companion is generated once, in the node type's
-  unit; no companion without such a reference; the `links` model unchanged
-  (the Redfish tests keep passing).
-- **Metadata:** listed keys copied at type and property level, values kept as YAML
-  lists and maps; unlisted keys ignored.
-- **`readOnly`:** emitted under `attributes`, absent from `properties`.
-- **Normalizer:** group-version-kind collapsed to a map with `group: ''` for core;
-  `apiVersion` and `kind` removed from node types only; `status` marked `readOnly`.
-- **End to end:** the trimmed Kubernetes fixture from the multi-output tests,
-  extended with `StatefulSet`, `PersistentVolumeClaim`, `Binding`, an autoscaling
-  `v1` and `v2` pair, a `resource.k8s.io` kind and a `*List` kind. Golden output.
-- **Baseline comparison:** the unmodified `oas2tosca` output for 1.35 is kept in the
-  community repository (`tosca-community-contributions`, `profiles/io/k8s/`, one
-  profile per API group). Converting the 1.35 specification and comparing the
-  result with it, unit by unit, shows every difference in the generated part
-  of the profile without the hand-written post-processing in the way. The
-  differences should be exactly those listed under
-  [What regeneration changes](#what-regeneration-changes-in-the-published-profile),
-  plus the TOSCA 1.3 to 2.0 syntax.
-- **Full spec:** converting the real `swagger.json` succeeds and writes one unit
-  file per GA group plus six library and extension units (25 at 1.35, 26 at 1.37),
-  and the resulting `profile.yaml` onboards with the `ubicity` CLI. Run by hand,
-  not in CI, because the input is 3.8 MB and fetched from upstream.
-
----
-
-## Regeneration plan
-
-1. **1.35 first.** Regenerate `io.kubernetes:1.35` and compare with the baseline
-   (see [Testing](#testing)). The regenerated files replace the generated part of
-   the published 1.35 profile; the hand-written post-processing is reapplied on
-   top, following `GENERATING.md`.
-2. **Then 1.37**, the current stable release, as a new profile version
-   `io.kubernetes:1.37`. The split rules hold for both versions; only the counts
-   differ.
-
----
-
-## Baseline comparison (1.35)
-
-`oas2tosca --kubernetes` on the 1.35 specification, compared unit by unit with
-the unmodified `oas2tosca` output in `tosca-community-contributions`
-(`profiles/io/k8s/`): types, node or data kind, `derived_from`, type and
-property metadata, and per property the type, entry and key schemas,
-`required`, default and validation. Descriptions and formatting are not
-compared. Run 2026-11-25.
-
-### Differences from the baseline
-
-| Difference | Count |
-|---|---|
-| `in_range` validation gone; every one came from `format: int32` / `int64` (the specification has no `minimum` or `maximum` on these) | 184 properties |
-| `apiVersion` and `kind` properties removed from resources | 57 node types |
-| `status` an attribute | 26 node types |
-| Action requests a data type: `Binding`, `Eviction`, `TokenRequest`, the six reviews, and `Scale` (a `PUT`-only body, a node type in `oas2tosca`) | 10 types |
-| `volumeClaimTemplates` typed `core:PersistentVolumeClaimValue` | 1 property |
-| Core group `group: ''` (empty in the baseline) | every core kind |
-| `autoscaling/v2` `HorizontalPodAutoscaler` replaces `v1`: four properties differ, `currentReplicas` is optional, and 19 `v2` data types are new | 1 type |
-| `x-kubernetes-map-type` metadata, which `oas2tosca` did not copy | 26 types, 7 properties |
-| `io.k8s.apimachinery.pkg.version` not produced (skipped by the rules) | 1 profile |
-| API response and discovery types the baseline left out, because `oas2tosca` emitted only types reachable from a resource: `meta` `Status`, `StatusCause`, `StatusDetails`, `WatchEvent`, `APIGroup`, `APIResource`, `APIVersions`, `GroupVersionForDiscovery`, `ServerAddressByClientCIDR`, `GroupResource`, `ListMeta`, `Patch`; `core` `ComponentStatus`, `ComponentCondition`; and `PersistentVolumeClaimValue` | 15 data types |
-
-### Baseline defects the regeneration corrects
-
-- **`resource.k8s.io` references to `Quantity` had no namespace** (`Quantity`
-  instead of `resource:Quantity`): 9 properties, which do not resolve in the
-  baseline.
-- **`PersistentVolumeClaim` was a data type** in the baseline. It is a node type.
-- **`DeleteOptions` kept only the first of its 62 group-version-kinds**, as a
-  map. All of them are kept, as a list.
+The generated files hold the Kubernetes types as the specification defines
+them. A profile that deploys resources adds its own types and lifecycle
+operations on top, such as the base resource types, requirements between
+resources and the scripts that apply them; the published `io.kubernetes`
+profiles describe how they are generated and finished in their `GENERATING.md`.

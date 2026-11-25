@@ -1,7 +1,12 @@
 # Redfish Schema Conversion
 
 This document describes how `redfish2tosca` converts a Redfish JSON Schema
-document into TOSCA 2.0 type definitions.
+document into TOSCA 2.0 type definitions. It converts with the Redfish
+conventions (`formats.REDFISH`: `Conventions(relationship_model="links",
+redfish=True)`): the `links` relationship model, and the Redfish rules for
+versioned schema families, the file-root heuristic and the `Links` and
+`Actions` properties. No other command applies these rules; `any2tosca`
+converts the same files as plain JSON Schema.
 
 ---
 
@@ -78,12 +83,12 @@ Redfish uses `x-longDescription` for normative text when a shorter
 This promotion happens at both the definition level and inside every property
 schema recursively.
 
-### 1.4 Drop all other `x-*` extension keywords
+### 1.4 Keep the other `x-*` extension keywords
 
-All remaining Redfish extension keywords (`x-longDescription` after promotion,
-`x-units`, `x-readonly`, `x-requiredOnCreate`, …) are dropped. Only standard
-JSON Schema keywords and the Redfish `parameters` keyword (used for Actions,
-see §2.5) are preserved.
+The other Redfish extension keywords (`x-units`, `x-requiredOnCreate`, …) are
+kept. The converter ignores them, except those named with
+`--extension-metadata`, which it copies into the `metadata` of the type or
+property they appear on (`--extension-metadata x-units`).
 
 ### 1.5 Flatten nullable `anyOf` patterns
 
@@ -297,7 +302,8 @@ according to the algorithm in `docs/circular-import-algorithm.md`.
 
 ### 2.7 Post-processing passes
 
-After all definitions are converted, four passes clean up the output:
+After all definitions are converted, four passes clean up the output (the two
+promotions belong to the `links` relationship model):
 
 | Pass | What it does |
 |---|---|
@@ -400,7 +406,8 @@ which prevents circular TOSCA imports through requirement/capability chains.
 | Object with `properties` | `data_types` entry with `properties` |
 | Object named in `node_type_names` | `node_types` entry |
 | `anyOf` with versioned refs | `derived_from` (highest version) + merged inline props |
-| `anyOf` with single unversioned ref | Properties merged inline; no `derived_from` |
+| `anyOf` with a single unversioned ref | `derived_from` that ref |
+| `anyOf` with several unversioned refs | first ref → `derived_from`, the others' properties merged |
 | `allOf` members | Properties and metadata merged; first ref → `derived_from` |
 | `enum` | `data_types` entry with `derived_from: string` + `validation.$valid_values` |
 | `minimum`/`maximum`/`pattern`/… | `validation` expression on the property or data type |
@@ -414,11 +421,14 @@ which prevents circular TOSCA imports through requirement/capability chains.
 ## Known omissions
 
 - **`additionalProperties: false`** — not enforced in TOSCA; ignored.
-- **`readOnly` / `writeOnly`** — no TOSCA equivalent; dropped.
+- **`readonly`** — Redfish marks read-only properties with its own `readonly`
+  keyword, which the converter ignores. (The JSON Schema keyword `readOnly`
+  makes a node-type property an attribute, in every format.) `writeOnly` is
+  dropped.
 - **`$schema` / `$id`** — used only for `$ref` resolution; not emitted.
 - **OData annotation properties** (`@odata.*`, `@Redfish.*`) — dropped.
 - **`Oem` extension objects** — converted as plain `map` properties or dropped
   from Links/Actions expansion.
-- **`anyOf` union semantics** — when multiple `$ref` alternatives are present,
-  their property union cannot be represented faithfully in TOSCA; a warning is
-  emitted and properties are merged (last wins).
+- **`anyOf` union semantics** — when several `$ref` alternatives are present,
+  the choice between them cannot be represented in TOSCA; a warning is emitted,
+  the first becomes `derived_from` and the others' properties are merged.

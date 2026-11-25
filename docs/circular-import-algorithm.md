@@ -5,15 +5,23 @@ corpora contain many cross-file `$ref` cycles, `converter.py` applies a
 multi-layered algorithm to detect and break those cycles before they reach the
 TOSCA output.
 
+The rules for **versioned** files (`BaseName.vX_Y_Z`) apply only under the
+Redfish conventions (`Conventions(redfish=True)`, the `redfish2tosca`
+command): every versioned-name check goes through `Converter._versioned`,
+which matches nothing otherwise, so for every other format all files are
+unversioned and only the unversioned (transitive) checks apply. A split
+(`docs/splitting.md`) removes cycles between its units before conversion,
+so none of this triggers for split output.
+
 ---
 
 ## Concepts
 
 ### Versioned vs. unversioned files
 
-Redfish schemas come in two shapes:
+Redfish schemas come in two kinds:
 
-| Shape | Example | Role |
+| Kind | Example | Role |
 |---|---|---|
 | **Unversioned stub** | `NetworkAdapter.json` | Aggregates versioned variants via `anyOf`. Never defines types independently. |
 | **Versioned schema** | `NetworkAdapter.v1_14_0.json` | Defines the actual type properties. Used as `derived_from` target. |

@@ -2,7 +2,7 @@
 split.py
 --------
 Splits one normalized root schema into several units, each converted to its
-own TOSCA file.  See ``docs/multi-output.md``.
+own TOSCA file.  See ``docs/splitting.md``.
 
 Split rules assign every definition of the root schema to a unit (or skip
 it) and give it its TOSCA type name.  The splitter builds one in-memory JSON
@@ -431,7 +431,7 @@ def split_schema(
     Raises
     ------
     SplitError
-        When the rules cannot be applied (see ``docs/multi-output.md``, *Checks*).
+        When the rules cannot be applied (see ``docs/splitting.md``, *Errors*).
     """
     definitions: dict[str, Any] = root_schema.get("definitions") or {}
     assigned, skipped = _assign(definitions, rules)

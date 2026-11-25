@@ -165,7 +165,7 @@ oas2tosca api.json --split rules.yaml --profile io.example:1.0 -o profile/
 | `--allow-skipped-refs` | warn, instead of failing, when a converted type references a skipped schema |
 
 Two schemas that get the same type name in one file, and files that import each
-other in a cycle, are errors. See [docs/multi-output.md](docs/multi-output.md).
+other in a cycle, are errors. See [docs/splitting.md](docs/splitting.md).
 
 ## What it generates
 
@@ -298,8 +298,8 @@ the profile, is planned.
 | `anyOf` / `oneOf` with several `$ref`s | first `$ref` → `derived_from`, the others' properties merged |
 | `definitions` / `$defs` | top-level `data_types` entries |
 
-[docs/jsonschema.md](docs/jsonschema.md) is a reference to the JSON Schema
-keywords themselves.
+The [JSON Schema reference](https://json-schema.org/understanding-json-schema/reference)
+describes the keywords themselves.
 
 ### OpenAPI
 
@@ -336,7 +336,7 @@ oas2tosca --kubernetes swagger.json --profile io.kubernetes:1.37 -o io/kubernete
   `volumeClaimTemplates`) is typed with its companion data type,
   `PersistentVolumeClaimValue`.
 
-Design: [docs/kubernetes.md](docs/kubernetes.md).
+[docs/kubernetes.md](docs/kubernetes.md) describes the conversion in full.
 
 ### Redfish
 

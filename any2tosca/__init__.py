@@ -1,11 +1,13 @@
 """
 any2tosca
 ----------
-Convert JSON Schema documents to TOSCA data types.
+Convert JSON Schema, OpenAPI (including the Kubernetes specification), Redfish
+and YANG schemas to TOSCA 2.0 node types and data types.
 
 Public API::
 
-    from any2tosca import convert_schema, build_tosca_document
+    from any2tosca import convert_schema, build_tosca_document, Conventions
+    from any2tosca.formats import JSON_SCHEMA, OPENAPI, KUBERNETES, REDFISH, YANG
     from any2tosca.yaml_utils import dump_tosca_yaml
 """
 

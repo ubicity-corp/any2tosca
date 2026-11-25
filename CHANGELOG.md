@@ -54,15 +54,13 @@ What changed in each release, and what to do about it.
   `convert_schema(..., conventions=Conventions(relationship_model, redfish,
   extension_metadata))` converts with a format's conventions; without them it
   uses `links` and no Redfish rules.
-- **`any2tosca` and `yang2tosca` now default to `value`.** Their node types no
-  longer get `feature` and `containable` capabilities, a `_caps.yaml` file or a
-  `Core.yaml` import: nothing they generate targets those capabilities, and
-  `Core.yaml` had to be supplied by hand. Pass `--relationship-model links` for
-  the previous output. `redfish2tosca` keeps `links`.
-- **`oas2tosca` now defaults to `value`.** Its output no longer has
-  capabilities, requirements, `_caps.yaml` files or a `Core.yaml` import, and
-  data types holding a node type's schema stay data types. Pass
-  `--relationship-model links` for the previous output.
+- **`any2tosca`, `oas2tosca` and `yang2tosca` now default to `value`.** Their
+  output no longer has `feature` and `containable` capabilities, requirements,
+  `_caps.yaml` files or a `Core.yaml` import, and a data type holding a node
+  type's schema stays a data type: nothing these formats generate targets
+  those capabilities, and `Core.yaml` had to be supplied by hand. Pass
+  `--relationship-model links` for the previous output. `redfish2tosca` keeps
+  `links`.
 - **Fixed:** an `allOf`, `anyOf` or `oneOf` written inline in a property, which
   adds properties to a `$ref` (or merges several `$ref`s), lost that parent: the
   inline data type now derives from it.

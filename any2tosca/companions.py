@@ -1,8 +1,8 @@
 """
 companions.py
 -------------
-By-value pre-pass for the ``value`` relationship model (``docs/kubernetes.md``,
-*References are by value*).
+By-value pre-pass for the ``value`` relationship model (the README's
+*Relationship models*).
 
 In OpenAPI a ``$ref`` embeds the referenced schema's value.  A property whose
 schema references a node-type schema therefore holds a value of that shape,

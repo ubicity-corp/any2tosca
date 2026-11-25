@@ -30,7 +30,7 @@ __all__ = ["Converter", "ConversionResult", "Conventions", "convert_schema",
 
 @dataclass(frozen=True)
 class Conventions:
-    """The conventions of an input format (``docs/generalization.md``).
+    """The conventions of an input format.
 
     relationship_model:
         ``"links"``: a reference to a node type is a relationship (a
@@ -80,7 +80,7 @@ class Converter:
         "null":    "string",   # TOSCA has no null; fall back to string
     }
 
-    #: Relationship models (``docs/kubernetes.md``, *Relationship model*).
+    #: Relationship models (the README's *Relationship models*).
     #: ``links``: a reference to a node type is a relationship (Redfish
     #: conventions: requirements, Feature/Containable capabilities, Core.yaml).
     #: ``value``: a reference embeds a value; none of the Redfish conventions apply.

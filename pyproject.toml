@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "any2tosca"
 version = "0.1.0"
-description = "Convert JSON Schema, OpenAPI, Redfish and YANG schemas to TOSCA 2.0 node types and data types"
+description = "Convert JSON Schema, OpenAPI (including the Kubernetes specification), Redfish and YANG schemas to TOSCA 2.0 node types and data types"
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
@@ -13,7 +13,7 @@ authors = [
     { name = "Ubicity Corp.", email = "info@ubicity.com" },
 ]
 requires-python = ">=3.10"
-keywords = ["tosca", "json-schema", "openapi", "redfish", "yang", "converter"]
+keywords = ["tosca", "json-schema", "openapi", "kubernetes", "redfish", "yang", "converter"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

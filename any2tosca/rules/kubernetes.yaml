@@ -3,7 +3,7 @@
 # One unit per GA API group, plus the apimachinery packages the groups share
 # and the apiextensions and apiregistration APIs. Alpha and beta versions are
 # skipped. Rules are first-match, so the skips that carve exceptions out of a
-# group come before the group rules. Design: docs/kubernetes.md, "Split rules".
+# group come before the group rules. See docs/kubernetes.md, "Files".
 
 rules:
   # *List kinds are list responses. Every definition ending in List is one

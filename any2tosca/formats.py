@@ -5,7 +5,7 @@ Input formats.  Every command runs the same pipeline (``cli.run``): load each
 input file, normalize it to a root JSON Schema, then split and convert it.  An
 ``InputFormat`` holds only what differs: which files a directory contributes,
 how a file is loaded, the normalizers that turn it into JSON Schema, and the
-format's defaults.  See ``docs/generalization.md``.
+format's defaults.
 """
 
 from __future__ import annotations
