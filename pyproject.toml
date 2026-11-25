@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "any2tosca"
-version = "0.1.0"
+version = "1.0.0"
 description = "Convert JSON Schema, OpenAPI (including the Kubernetes specification), Redfish and YANG schemas to TOSCA 2.0 node types and data types"
 readme = "README.md"
 license = "Apache-2.0"
@@ -15,7 +15,7 @@ authors = [
 requires-python = ">=3.10"
 keywords = ["tosca", "json-schema", "openapi", "kubernetes", "redfish", "yang", "converter"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",

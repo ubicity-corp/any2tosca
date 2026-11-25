@@ -422,8 +422,15 @@ print(dump_tosca_yaml(build_tosca_document(
 Under the `links` model, `result.capability_types` holds the capability types
 for `result.caps_file`; `any2tosca.converter.build_caps_document` builds that file's document.
 The Kubernetes format also splits its input; `any2tosca.split.split_schema`
-does that, as `oas2tosca --kubernetes` does. These functions and classes are
-not yet a stable API: they may change in any release before 1.0.
+does that, as `oas2tosca --kubernetes` does. The Python API is provisional (see
+[Versioning](#versioning)).
+
+## Versioning
+
+any2tosca follows [semantic versioning](https://semver.org/) for its commands:
+their options and the form of their output (the files written, how types are
+named and derived, the relationship models) change incompatibly only in a new
+major version. The Python API is provisional: it may change in a minor release.
 
 ## Development
 

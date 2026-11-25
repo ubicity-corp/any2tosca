@@ -25,4 +25,4 @@ __all__ = [
     "OpenAPIExtractor", "RedfishNormalizer",
     "dump_tosca_yaml",
 ]
-__version__ = "0.1.0"
+__version__ = "1.0.0"

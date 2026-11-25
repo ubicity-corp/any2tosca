@@ -2,7 +2,11 @@
 
 What changed in each release, and what to do about it.
 
-## Unreleased
+## 1.0.0
+
+The first stable release. The commands, their options and the form of their
+output follow semantic versioning from here on; the Python API is provisional
+and may change in a minor release. Since 0.1.0:
 
 - **Several TOSCA files from one input.** `--split RULES` divides the schemas of
   one input file among several TOSCA files by name, with imports between them.
