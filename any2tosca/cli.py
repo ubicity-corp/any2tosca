@@ -20,6 +20,7 @@ from typing import Any
 import yaml
 
 from .companions import CompanionError, add_value_companions
+from .kubernetes import EXTENSION_METADATA, RULES_PATH, KubernetesNormalizer
 from .converter import ConversionResult, Converter, build_caps_document, build_tosca_document, convert_schema
 from .openapi import OpenAPIExtractor
 from .redfish import RedfishNormalizer
@@ -413,7 +414,21 @@ def main_oas(argv: list[str] | None = None) -> int:
         "  oas2tosca specs/ -o output/",
         default_model="value",
     )
+    parser.add_argument(
+        "--kubernetes",
+        action="store_true",
+        help="Convert the Kubernetes OpenAPI specification: one file per GA API group "
+             "(packaged split rules, unless --split is given), the x-kubernetes-* "
+             "extensions as metadata, and resource types without apiVersion/kind and "
+             "with status as an attribute. Takes exactly one input file.",
+    )
     args = parser.parse_args(argv)
+    if args.kubernetes:
+        if args.relationship_model != "value":
+            print("Error: --kubernetes requires the value relationship model.", file=sys.stderr)
+            return 1
+        args.split = args.split or str(RULES_PATH)
+        args.extension_metadata = list(dict.fromkeys([*EXTENSION_METADATA, *args.extension_metadata]))
     input_files = _collect_input_files(args.inputs, (".json", ".yaml", ".yml"))
 
     if not input_files:
@@ -445,6 +460,10 @@ def main_oas(argv: list[str] | None = None) -> int:
             continue
 
         root_schema, node_type_names = extractor.extract(openapi_doc)
+        if args.kubernetes:
+            root_schema, node_type_names = KubernetesNormalizer().normalize(
+                root_schema, node_type_names
+            )
         if args.split:
             return _run_split(root_schema, node_type_names, args, api_path, search_paths, out_dir)
         root_schema = _by_value(root_schema, node_type_names, args)

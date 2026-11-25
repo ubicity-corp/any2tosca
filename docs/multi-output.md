@@ -1,6 +1,6 @@
 # Multi-Output Conversion
 
-**Status:** Design draft, not implemented.
+**Status:** Implemented (`any2tosca/split.py`, `--split`, `--profile`).
 
 Multi-output conversion turns **one input document** into **several TOSCA files**
 that import each other, optionally packaged as a single TOSCA profile. It is the

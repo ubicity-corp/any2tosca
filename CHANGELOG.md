@@ -25,6 +25,10 @@ What changed in each release, and what to do about it.
   only when it is posted to a path that also supports `GET`. Bodies posted
   only to action paths (such as a Kubernetes `pods/{name}/binding`) become
   data types.
+- **Kubernetes.** `oas2tosca --kubernetes` converts the Kubernetes OpenAPI
+  specification into one file per GA API group, using packaged split rules,
+  with `x-kubernetes-*` extensions as metadata, resource types without
+  `apiVersion`/`kind` properties, and `status` as an attribute.
 - **`oas2tosca` now defaults to `value`.** Its output no longer has
   capabilities, requirements, `_caps.yaml` files or a `Core.yaml` import, and
   data types holding a node type's schema stay data types. Pass

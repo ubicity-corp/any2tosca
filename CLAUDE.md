@@ -21,6 +21,7 @@ any2tosca schemas/ -o output_dir/ -I /extra/schema/search/dir
 
 redfish2tosca redfish_schema.json -o output_dir/
 oas2tosca openapi.yaml -o output_dir/
+oas2tosca --kubernetes swagger.json --profile io.kubernetes:1.35 -o io/kubernetes/1.35/
 yang2tosca model.yang -o output_dir/
 ```
 
@@ -37,6 +38,7 @@ This is a Python package that converts JSON Schema documents (and Redfish, OpenA
 - `any2tosca/yang.py` — `YANGNormalizer`: converts YANG `.yang` files to a JSON-Schema-like dict via `pyang`.
 - `any2tosca/split.py` — `split_schema()`: divides one normalized root schema into units (one TOSCA file each) by regex split rules, rewrites `$ref`s within/across units, rejects or merges import cycles. Used by the `--split` CLI option; units are converted with `Converter.convert_schema(..., documents=, namespaces=, node_types_by_file=)`. Design: `docs/multi-output.md`.
 - `any2tosca/companions.py` — `add_value_companions()`: the by-value pre-pass for the `value` relationship model. Each `$ref` to a node-type schema (except a node type's own `allOf` base) is pointed at a `<Name>Value` copy that converts to a data type. With `--split`, definitions the rules skip are ignored.
+- `any2tosca/kubernetes.py` — `KubernetesNormalizer` (runs after `OpenAPIExtractor` under `oas2tosca --kubernetes`): single-entry group-version-kind list → map, drops `apiVersion`/`kind` from node types, marks `status` readOnly. Also `EXTENSION_METADATA` and `RULES_PATH` (packaged split rules `any2tosca/rules/kubernetes.yaml`, shipped as package data).
 - `any2tosca/yaml_utils.py` — wraps PyYAML `yaml.dump` with a custom representer for folded-style multi-line strings.
 
 **Conversion flow:**

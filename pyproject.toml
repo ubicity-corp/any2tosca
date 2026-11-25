@@ -54,6 +54,9 @@ Issues   = "https://github.com/ubicity-corp/any2tosca/issues"
 [tool.setuptools.packages.find]
 include = ["any2tosca*"]
 
+[tool.setuptools.package-data]
+any2tosca = ["rules/*.yaml"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts   = "-v --tb=short"

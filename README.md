@@ -306,6 +306,32 @@ perform an action, and becomes a data type. References are converted by
 value (the `value` relationship model): a property whose schema is a node
 type's schema is typed with the companion data type `<Name>Value`.
 
+### Kubernetes → TOSCA
+
+`oas2tosca --kubernetes` converts the Kubernetes OpenAPI specification
+(`api/openapi-spec/swagger.json` in the Kubernetes repository) into one TOSCA
+file per GA API group, plus the shared `meta`, `resource`, `runtime` and
+`intstr` packages and the `apiextensions` and `apiregistration` APIs:
+
+```bash
+oas2tosca --kubernetes swagger.json --profile io.kubernetes:1.35 -o io/kubernetes/1.35/
+```
+
+- Alpha and beta versions and the `*List` kinds are left out. The packaged
+  split rules ([any2tosca/rules/kubernetes.yaml](any2tosca/rules/kubernetes.yaml))
+  decide the files; `--split RULES` replaces them.
+- Resources (schemas posted to a collection) become node types. Their
+  `x-kubernetes-group-version-kind` becomes a `metadata` map, with `group: ''`
+  for the core group; `apiVersion` and `kind`, which the type determines, are
+  not properties; and `status` is an attribute.
+- `x-kubernetes-list-type`, `x-kubernetes-list-map-keys` and
+  `x-kubernetes-map-type` become property `metadata`.
+- A resource embedded in another schema (a `StatefulSet`'s
+  `volumeClaimTemplates`) is typed with its companion data type,
+  `PersistentVolumeClaimValue`.
+
+Design: [docs/kubernetes.md](docs/kubernetes.md).
+
 ### Redfish → TOSCA
 
 `redfish2tosca` first normalizes a Redfish schema into plain JSON Schema,
@@ -346,11 +372,8 @@ YANG integer types (`int8`–`int64`, `uint8`–`uint64`) map to TOSCA `integer`
   The values they constrain are converted; the constraints they add are not.
   `readOnly` is converted on node types only (see
   [What it generates](#what-it-generates)); in data types it is left out.
-- **Kubernetes:** the Kubernetes OpenAPI definitions convert like any other
-  OpenAPI document: `--split` divides them into one file per API group, and
-  `--extension-metadata` carries the `x-kubernetes-*` extensions. A Kubernetes
-  preset (packaged split rules, which schemas are resources, the resource
-  adjustments) is not yet available; see [docs/kubernetes.md](docs/kubernetes.md).
+- **Kubernetes `IntOrString`:** TOSCA has no union type, so `IntOrString`
+  fields are strings and do not take an integer value.
 
 ## Python API
 

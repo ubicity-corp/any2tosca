@@ -1,6 +1,7 @@
 # Kubernetes Conversion
 
-**Status:** Design draft, not implemented.
+**Status:** Implemented (`oas2tosca --kubernetes`). The baseline comparison under
+[Testing](#testing) is still to be done.
 
 `oas2tosca --kubernetes` converts the Kubernetes OpenAPI specification
 (`api/openapi-spec/swagger.json` in the Kubernetes repository) into the generated

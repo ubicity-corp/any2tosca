@@ -1,0 +1,47 @@
+# Split rules for the Kubernetes OpenAPI specification (oas2tosca --kubernetes).
+#
+# One unit per GA API group, plus the apimachinery packages the groups share
+# and the apiextensions and apiregistration APIs. Alpha and beta versions are
+# skipped. Rules are first-match, so the skips that carve exceptions out of a
+# group come before the group rules. Design: docs/kubernetes.md, "Split rules".
+
+rules:
+  # *List kinds are list responses. Every definition ending in List is one
+  # (checked against 1.35 and 1.37); none is deployable.
+  - match: '.*List'
+    skip: true
+
+  # apimachinery packages shared by all groups.
+  - match: 'io\.k8s\.apimachinery\.pkg\.apis\.meta\.v1\.(?P<name>[^.]+)'
+    unit: meta
+  - match: 'io\.k8s\.apimachinery\.pkg\.api\.resource\.(?P<name>[^.]+)'
+    unit: resource
+  - match: 'io\.k8s\.apimachinery\.pkg\.runtime\.(?P<name>[^.]+)'
+    unit: runtime
+  - match: 'io\.k8s\.apimachinery\.pkg\.util\.intstr\.(?P<name>[^.]+)'
+    unit: intstr
+
+  # The resource.k8s.io group would otherwise share the unit name 'resource'
+  # with the apimachinery package above, which profile files import as
+  # resource:Quantity.
+  - match: 'io\.k8s\.api\.resource\.v1\.(?P<name>[^.]+)'
+    unit: dra
+
+  # autoscaling has two GA versions: v2 holds the current HorizontalPodAutoscaler,
+  # v1 holds Scale, which exists only there. Skip the v1 definitions v2 replaces.
+  - match: 'io\.k8s\.api\.autoscaling\.v1\.(HorizontalPodAutoscaler(Spec|Status)?|CrossVersionObjectReference)'
+    skip: true
+  - match: 'io\.k8s\.api\.autoscaling\.v[12]\.(?P<name>[^.]+)'
+    unit: autoscaling
+
+  # Every other GA group, one unit each, named after the group.
+  - match: 'io\.k8s\.api\.(?P<unit>[a-z]+)\.v1\.(?P<name>[^.]+)'
+
+  - match: 'io\.k8s\.apiextensions-apiserver\.pkg\.apis\.apiextensions\.v1\.(?P<name>[^.]+)'
+    unit: apiextensions
+  - match: 'io\.k8s\.kube-aggregator\.pkg\.apis\.apiregistration\.v1\.(?P<name>[^.]+)'
+    unit: apiregistration
+
+  # Alpha and beta versions, and io.k8s.apimachinery.pkg.version.Info.
+  - match: '.*'
+    skip: true
