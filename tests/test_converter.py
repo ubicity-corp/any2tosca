@@ -1118,3 +1118,52 @@ def test_cli_extension_metadata_option(tmp_path):
     doc = yaml.safe_load((out / "s.yaml").read_text())
     assert doc["data_types"]["S"]["metadata"] == {"x-owner": "team"}
     assert doc["data_types"]["S"]["properties"]["a"]["metadata"] == {"x-owner": "me"}
+
+
+# ── readOnly → attribute ──────────────────────────────────────────────────────
+
+_RO_ROOT = {"definitions": {
+    "Deployment": {
+        "type": "object",
+        "required": ["spec", "status"],
+        "properties": {
+            "spec": {"type": "string"},
+            "status": {"$ref": "#/definitions/Status", "readOnly": True,
+                       "description": "Observed state."},
+            "notReadOnly": {"type": "string", "readOnly": False},
+        },
+    },
+    "Status": {"type": "object", "properties": {
+        "phase": {"type": "string", "readOnly": True},
+    }},
+}}
+
+
+@pytest.mark.parametrize("model", ["links", "value"])
+def test_read_only_property_of_node_type_becomes_attribute(model):
+    dep = Converter().convert_schema(_RO_ROOT, "x", {"Deployment"},
+                                     relationship_model=model).node_types["Deployment"]
+    assert "status" not in dep["properties"]
+    assert dep["attributes"]["status"]["type"] == "Status"
+    assert dep["attributes"]["status"]["description"] == "Observed state."
+    assert set(dep["properties"]) == {"spec", "notReadOnly"}
+
+
+def test_attribute_has_no_required_keyword():
+    dep = Converter().convert_schema(_RO_ROOT, "x", {"Deployment"},
+                                     relationship_model="value").node_types["Deployment"]
+    assert "required" not in dep["attributes"]["status"]
+    assert dep["properties"]["spec"]["required"] is True
+
+
+def test_attributes_follow_properties():
+    dep = Converter().convert_schema(_RO_ROOT, "x", {"Deployment"},
+                                     relationship_model="value").node_types["Deployment"]
+    keys = list(dep)
+    assert keys.index("attributes") == keys.index("properties") + 1
+
+
+def test_read_only_property_of_data_type_stays_a_property():
+    status = Converter().convert_schema(_RO_ROOT, "x", {"Deployment"}).data_types["Status"]
+    assert "phase" in status["properties"]
+    assert "attributes" not in status

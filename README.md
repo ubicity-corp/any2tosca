@@ -157,7 +157,9 @@ other in a cycle, are errors. See [docs/multi-output.md](docs/multi-output.md).
 - **Node types** for the schemas that describe resources, as each format
   identifies them: OpenAPI request bodies of `POST` operations, the Redfish
   resource a schema file defines, and top-level YANG containers and lists.
-  Plain JSON Schema produces data types only.
+  Plain JSON Schema produces data types only. A node-type property marked
+  `readOnly: true`, a value the system sets rather than one the template
+  supplies, becomes an **attribute** instead of a property.
 - **Capabilities and requirements** that let node types be connected, under
   the `links` relationship model (the default of `any2tosca`, `redfish2tosca`
   and `yang2tosca`). Every node type gets a `feature` and a `containable`
@@ -337,9 +339,10 @@ YANG integer types (`int8`–`int64`, `uint8`–`uint64`) map to TOSCA `integer`
 
 - **JSON Schema keywords left out of the conversion:** `const`, `format`,
   `multipleOf`, `minItems` / `maxItems`, `uniqueItems`, `patternProperties`,
-  `if` / `then` / `else`, `not`, `readOnly` / `writeOnly`, and OpenAPI's
-  `discriminator`. The values they constrain are converted; the constraints
-  they add are not.
+  `if` / `then` / `else`, `not`, `writeOnly`, and OpenAPI's `discriminator`.
+  The values they constrain are converted; the constraints they add are not.
+  `readOnly` is converted on node types only (see
+  [What it generates](#what-it-generates)); in data types it is left out.
 - **Kubernetes:** the Kubernetes OpenAPI definitions convert like any other
   OpenAPI document: `--split` divides them into one file per API group, and
   `--extension-metadata` carries the `x-kubernetes-*` extensions. A Kubernetes

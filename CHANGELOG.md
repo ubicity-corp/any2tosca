@@ -18,6 +18,9 @@ What changed in each release, and what to do about it.
   schema key, typically a vendor extension such as `x-kubernetes-list-type`,
   into the `metadata` of the type or property it appears on. Values are kept
   as YAML lists and maps.
+- **`readOnly` becomes an attribute.** A node-type property whose schema has
+  `readOnly: true` is converted to a TOSCA attribute (without `required`)
+  instead of a property, in every command. Data types are unchanged.
 - **`oas2tosca` now defaults to `value`.** Its output no longer has
   capabilities, requirements, `_caps.yaml` files or a `Core.yaml` import, and
   data types holding a node type's schema stay data types. Pass

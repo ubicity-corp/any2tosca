@@ -1813,15 +1813,31 @@ class Converter:
                 )
                 for pname, pschema in regular_props.items()
             }
+            # A readOnly property of a node type is a value the system sets, not
+            # one the template supplies: a TOSCA attribute.  Attribute definitions
+            # have no 'required' keyword.  Data types have no attributes, so there
+            # readOnly properties stay properties.
+            attributes: dict[str, Any] = {}
+            if is_node_type:
+                for pname, pschema in regular_props.items():
+                    if isinstance(pschema, dict) and pschema.get("readOnly") is True:
+                        aname = self.sanitize_name(pname)
+                        attribute = all_props.pop(aname)
+                        attribute.pop("required", None)
+                        attributes[aname] = attribute
             if is_node_type and not self._links:
                 if all_props:
                     tosca_type["properties"] = all_props
+                if attributes:
+                    tosca_type["attributes"] = attributes
             elif is_node_type:
                 # Properties referencing node types become TOSCA requirements.
                 plain_props, requirements = self._split_props_and_requirements(all_props)
                 requirements.extend(links_requirements)
                 if plain_props:
                     tosca_type["properties"] = plain_props
+                if attributes:
+                    tosca_type["attributes"] = attributes
                 if requirements:
                     tosca_type["requirements"] = requirements
                 if actions_interface:
