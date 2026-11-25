@@ -34,7 +34,7 @@ A small Kubernetes module supplies only what depends on Kubernetes conventions.
 | Piece | Where | Kubernetes-specific? |
 |---|---|---|
 | [Node types: resources you can create and read back](#node-types) | `OpenAPIExtractor` | No |
-| [References are by value](#references-are-by-value) | `Converter`, enabled for OpenAPI | No |
+| [References are by value](#references-are-by-value) | Schema pre-pass and `Converter` option, the default for OpenAPI | No |
 | [Extensions copied to metadata](#extensions-to-metadata) | `Converter` | No (Kubernetes picks the list) |
 | [`readOnly` properties become attributes](#readonly-becomes-attribute) | `Converter` | No |
 | [Split rules for API groups](#split-rules) | `any2tosca/rules/kubernetes.yaml` | Yes |
@@ -88,17 +88,41 @@ For OpenAPI input, references are by value:
   exists, in the same unit as the node type.
 - No data type is promoted to a node type because of the properties it holds.
 
+Companions are made by a **pre-pass over the schema**, before the split and
+before conversion. For every `$ref` to a node-type schema, except one in the
+`allOf` of another node-type schema (which is inheritance), the pre-pass adds a
+definition named after the node-type definition with `Value` appended
+(`io.k8s.api.core.v1.PersistentVolumeClaimValue`), a copy of the node-type schema,
+and points the `$ref` at it. A companion name that already exists as a definition is an error. After the
+pre-pass, no schema references a node-type schema by value. The split rules place
+the companion with its node type, because both names share the same prefix.
+
 In 1.37 the one case outside the `*List` kinds is `StatefulSetSpec.volumeClaimTemplates`,
 a list of `PersistentVolumeClaim`. It becomes `entry_schema: core:PersistentVolumeClaimValue`.
 The published profile has `entry_schema: core:PersistentVolumeClaim`, a node type
 as a list entry, which a schema definition does not allow.
 
-The switch belongs with the other Redfish conventions that `convert_schema`
-applies to every input today (the `Core.yaml` import, the `Feature` and
-`Containable` capabilities, the `_caps.yaml` companion file; see
-[multi-output](multi-output.md#behaviour-this-design-does-not-change-but-which-matters-for-kubernetes)).
-All of them become one converter option, the **relationship model**: `links` for
-Redfish (today's behaviour) and `value` for OpenAPI. `value` turns all of them off.
+### Relationship model
+
+By-value references are one of several Redfish conventions that `convert_schema`
+applies to every input today. They all become one converter option,
+`relationship_model`:
+
+| Behaviour | `links` | `value` |
+|---|---|---|
+| A property of a node type that references a node type becomes a requirement | yes | never arises: the pre-pass leaves no such reference |
+| A data type holding such a property is promoted to a node type | yes | never arises, as above |
+| A data type derived from a node type becomes a node type with `Feature` and `Containable` capabilities | yes | never arises: the pre-pass points the base at `<Kind>Value` |
+| Every node type gets a type-specific `Feature` capability | yes | no |
+| Every node type gets a type-specific `Containable` capability | yes | no |
+| `Core.yaml` imported under namespace `core` | yes | no |
+| `<unit>_caps.yaml` written with the capability types | yes | no |
+| Redfish `Links` and `Actions` properties expanded into requirements and an interface | yes | no: ordinary properties |
+
+`links` is today's behaviour, unchanged, and the default of `any2tosca`,
+`redfish2tosca` and `yang2tosca`. `value` is the default of `oas2tosca`. Each CLI
+takes `--relationship-model links|value` to override its default. The by-value
+pre-pass runs when the model is `value`.
 
 ---
 
@@ -145,8 +169,10 @@ hand fix unnecessary.
 
 ## `readOnly` becomes attribute
 
-A converter change for all input formats: a property whose schema has
-`readOnly: true` is emitted as an **attribute** instead of a property. In JSON
+A converter change for all input formats: a property of a node type whose schema
+has `readOnly: true` is emitted as an **attribute** instead of a property. Data
+types have no attributes, so in a data type it stays a property, as in a
+companion `<Kind>Value`. In JSON
 Schema, `readOnly` marks a value the server sets and the client does not supply,
 which is exactly a TOSCA attribute that is not a property. The converter emits no
 attributes today, and the README lists `readOnly` among the keywords it ignores.
@@ -193,7 +219,7 @@ The same kind name in two groups (`Event` in `core` and `events`, `TokenRequest`
 in `authentication` and `storage`, `ResourceClaim` in `core` and `dra`) is not a
 clash: they land in different units.
 
-The rules cover all 20 GA groups. The published profile aggregates five (`core`,
+The rules cover every GA group: 19 in 1.35, 20 in 1.37. The published profile aggregates five (`core`,
 `apps`, `storage`, `networking`, `rbac`) and lists `batch` as remaining work.
 
 ---
@@ -221,13 +247,13 @@ the same interface `RedfishNormalizer` has. It adds no node types of its own.
 ## Command line
 
 ```bash
-oas2tosca --kubernetes swagger.json --profile io.kubernetes:1.37 -o io/kubernetes/1.37/
+oas2tosca --kubernetes swagger.json --profile io.kubernetes:1.35 -o io/kubernetes/1.35/
 ```
 
 `--kubernetes` sets:
 
 - `--split` to the packaged Kubernetes rules,
-- the relationship model to `value`,
+- the relationship model to `value` (already the `oas2tosca` default),
 - `extension_metadata` to the four keys above,
 - `KubernetesNormalizer` after `OpenAPIExtractor`.
 
@@ -248,7 +274,7 @@ Comparing the result of the new generator with the published profile:
 | `PersistentVolumeClaim` in `StatefulSetSpec` | Becomes `PersistentVolumeClaimValue`. |
 | Action requests | `Binding` becomes a data type; it is a node type in the published `core.yaml`. |
 | `PodTemplate` | Stays a node type (it is a resource collection). Part 2, Step 2 turns it into a data type by hand. |
-| Groups | 20 GA groups instead of 5. |
+| Groups | Every GA group (19 at 1.35) instead of 5. |
 | `status` | An attribute, `apiVersion` and `kind` gone: the generated half of Part 2, Step 3. |
 
 ---
@@ -257,7 +283,8 @@ Comparing the result of the new generator with the published profile:
 
 - **Extractor:** a `POST` body on a path with `GET` is a node type; one on a
   `POST`-only path is a data type; both for OpenAPI 2.0 body parameters and 3.x
-  `requestBody`.
+  `requestBody`. The existing fixtures in `tests/test_openapi.py` have `POST`-only
+  paths and gain a `GET`, so their node-type expectations still hold.
 - **By value:** a data type holding a node-type schema stays a data type and
   references `<Kind>Value`; the companion is generated once, in the node type's
   unit; no companion without such a reference; the `links` model unchanged
@@ -278,25 +305,19 @@ Comparing the result of the new generator with the published profile:
   differences should be exactly those listed under
   [What regeneration changes](#what-regeneration-changes-in-the-published-profile),
   plus the TOSCA 1.3 to 2.0 syntax.
-- **Full spec:** converting the real 1.37 `swagger.json` succeeds, writes 26 unit
-  files (20 API groups plus six library and extension units), and its `profile.yaml` onboards with the `ubicity` CLI. Run by hand, not in
-  CI, because the input is 3.8 MB and fetched from upstream.
+- **Full spec:** converting the real `swagger.json` succeeds and writes one unit
+  file per GA group plus six library and extension units (25 at 1.35, 26 at 1.37),
+  and the resulting `profile.yaml` onboards with the `ubicity` CLI. Run by hand,
+  not in CI, because the input is 3.8 MB and fetched from upstream.
 
 ---
 
-## Decisions to confirm
+## Regeneration plan
 
-- **Regenerate against 1.37**, the current stable release, as a new profile
-  version `io.kubernetes:1.37`, rather than against 1.35 to match the published
-  profile. Comparing new output with the published profile is easier at 1.35.
-- **All GA groups**, rather than the five in the published profile. More types,
-  and the remaining-work entry for `batch` goes away.
-- **`PodTemplate` as a node type.** It is a real resource; the hand edit that makes
-  it a data type would be dropped.
-- **`Binding` as a data type.** It is an action on a pod, not something a template
-  deploys; the published profile has it as a node type.
-- **Companion data type name** `<Kind>Value`. Clashes with an existing definition
-  name are caught by the multi-output collision check.
-- **Range validation from `format`.** Leaving it out drops the `int32` ranges.
-  Emitting them would be a general converter change (`int32` and `int64` bounds
-  for every input format); this design leaves it out.
+1. **1.35 first.** Regenerate `io.kubernetes:1.35` and compare with the baseline
+   (see [Testing](#testing)). The regenerated files replace the generated part of
+   the published 1.35 profile; the hand-written post-processing is reapplied on
+   top, following `GENERATING.md`.
+2. **Then 1.37**, the current stable release, as a new profile version
+   `io.kubernetes:1.37`. The split rules hold for both versions; only the counts
+   differ.

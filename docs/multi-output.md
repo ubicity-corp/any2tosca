@@ -105,6 +105,10 @@ The splitter stops with an error, before converting anything, when:
 - a unit name matches the converter's versioned-file pattern (`Base.vX_Y_Z`).
   Unit documents must not trigger the versioned-file handling in
   `_collect_no_import_files` and `_ref_to_tosca_type`.
+- under the `links` [relationship model](kubernetes.md#relationship-model), a
+  unit's namespace is `core`. That namespace imports `Core.yaml` under `links`,
+  so the unit's import would overwrite it. Under `value`, `core` is free (the
+  Kubernetes `core` group).
 
 ### Skipped definitions
 
@@ -224,8 +228,8 @@ input format:
 
 These come from the Redfish conversion model. Split output inherits them per
 unit. The Kubernetes profile does not use them, so they must become options before
-`any2tosca` can regenerate that profile. That work is separate from this design
-and needs its own.
+`any2tosca` can regenerate that profile. The option that controls them is the
+[relationship model](kubernetes.md#relationship-model).
 
 ---
 
