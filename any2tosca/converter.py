@@ -1913,7 +1913,8 @@ class Converter:
         # _current_refs_fname checks work even when the source file is not
         # present on disk (where _ref_fnames_for would return empty).
         self._current_file_refs = frozenset(self._collect_ref_fnames(root_schema))
-        self._node_type_names = set(node_type_names)
+        # Definitions are converted under their sanitized names, so match those.
+        self._node_type_names = {self.sanitize_name(n) for n in node_type_names}
         self._collect_no_import_files(root_schema)
         data_types: dict[str, Any] = {}
         node_types: dict[str, Any] = {}

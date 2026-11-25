@@ -1035,3 +1035,9 @@ def test_write_file_names_output_by_stem(tmp_path):
     out = _write_file(result, "apps", tmp_path)
     assert out == tmp_path / "apps.yaml"
     assert out.exists()
+
+
+def test_dotted_node_type_names_become_node_types():
+    root = {"definitions": {"io.x.v1.Pod": {"type": "object", "properties": {"name": {"type": "string"}}}}}
+    result = Converter().convert_schema(root, "x", {"io.x.v1.Pod"})
+    assert set(result.node_types) == {"io_x_v1_Pod"}
