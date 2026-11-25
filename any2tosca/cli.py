@@ -19,10 +19,11 @@ from typing import Any
 
 import yaml
 
+from .companions import CompanionError, add_value_companions
 from .converter import ConversionResult, Converter, build_caps_document, build_tosca_document, convert_schema
 from .openapi import OpenAPIExtractor
 from .redfish import RedfishNormalizer
-from .split import SplitError, load_rules, split_schema
+from .split import SplitError, load_rules, skipped_definitions, split_schema
 from .yang import YANGNormalizer
 from .yaml_utils import FoldedStr, dump_tosca_yaml
 
@@ -31,7 +32,9 @@ __all__ = ["main_json", "main_redfish", "main_oas", "main_yang"]
 
 # ── Shared helpers ────────────────────────────────────────────────────────────
 
-def _make_parser(prog: str, description: str, epilog: str) -> argparse.ArgumentParser:
+def _make_parser(
+    prog: str, description: str, epilog: str, default_model: str = "links"
+) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=prog,
         description=description,
@@ -63,6 +66,14 @@ def _make_parser(prog: str, description: str, epilog: str) -> argparse.ArgumentP
         action="store_true",
         help="Print extra detail while processing.",
     )
+    parser.add_argument(
+        "--relationship-model",
+        choices=Converter.RELATIONSHIP_MODELS,
+        default=default_model,
+        help="How references to node types are converted: 'links' makes them "
+             "requirements and adds the Core.yaml capabilities; 'value' treats them "
+             f"as embedded values (default: {default_model}).",
+    )
     split = parser.add_argument_group("multi-output (one input, several TOSCA files)")
     split.add_argument(
         "--split",
@@ -87,6 +98,22 @@ def _make_parser(prog: str, description: str, epilog: str) -> argparse.ArgumentP
              "NAME:VERSION. Requires --split.",
     )
     return parser
+
+
+def _by_value(
+    root_schema: dict[str, Any],
+    node_type_names: Any,
+    args: argparse.Namespace,
+    ignore: Any = (),
+) -> dict[str, Any] | None:
+    """Apply the by-value pre-pass under the 'value' model; None (after reporting) on error."""
+    if args.relationship_model != "value":
+        return root_schema
+    try:
+        return add_value_companions(root_schema, node_type_names, ignore)
+    except CompanionError as exc:
+        print(f"  ✗ {exc}", file=sys.stderr)
+        return None
 
 
 def _split_args_error(args: argparse.Namespace, input_files: list[Path]) -> str | None:
@@ -128,12 +155,17 @@ def _run_split(
     """Split *root_schema* into units, convert each, and write one file per unit."""
     try:
         rules = load_rules(Path(args.split))
+        root_schema = _by_value(
+            root_schema, node_type_names, args, skipped_definitions(root_schema, rules)
+        )
+        if root_schema is None:
+            return 1
         split = split_schema(
             root_schema, rules, node_type_names,
             merge_cycles=args.merge_cycles,
             allow_skipped_refs=args.allow_skipped_refs,
             # Under the Redfish conventions the converter imports Core.yaml as 'core'.
-            reserved_namespaces={"core"},
+            reserved_namespaces={"core"} if args.relationship_model == "links" else (),
         )
     except SplitError as exc:
         print(f"Error: {exc}", file=sys.stderr)
@@ -151,6 +183,7 @@ def _run_split(
             documents=split.documents,
             namespaces=split.namespaces,
             node_types_by_file=split.node_types_by_file,
+            relationship_model=args.relationship_model,
         )
         _report(result, args.verbose, Path(unit.tosca_file))
         out_path = _write_file(result, unit.name, out_dir)
@@ -265,7 +298,8 @@ def main_json(argv: list[str] | None = None) -> int:
             return _run_split(root_schema, frozenset(), args, schema_path, search_paths, out_dir)
         top_name = root_schema.get("title") or schema_path.stem
         result = convert_schema(root_schema, top_name, base_path=schema_path.parent,
-                                search_paths=search_paths, source_path=schema_path)
+                                search_paths=search_paths, source_path=schema_path,
+                                relationship_model=args.relationship_model)
         _report(result, args.verbose, schema_path)
         if not result.data_types and not result.node_types:
             continue
@@ -328,11 +362,16 @@ def main_redfish(argv: list[str] | None = None) -> int:
         root_schema, node_type_names = normalizer.normalize(redfish_schema)
         if args.split:
             return _run_split(root_schema, node_type_names, args, schema_path, search_paths, out_dir)
+        root_schema = _by_value(root_schema, node_type_names, args)
+        if root_schema is None:
+            errors += 1
+            continue
         top_name = next(iter(node_type_names), None) or schema_path.stem
         result = converter.convert_schema(root_schema, top_name, node_type_names,
                                           base_path=schema_path.parent,
                                           search_paths=search_paths,
-                                          source_path=schema_path)
+                                          source_path=schema_path,
+                                          relationship_model=args.relationship_model)
         _report(result, args.verbose, schema_path)
         if not result.data_types and not result.node_types:
             continue
@@ -361,6 +400,7 @@ def main_oas(argv: list[str] | None = None) -> int:
         "  oas2tosca api.yaml\n"
         "  oas2tosca api.json -o output/\n"
         "  oas2tosca specs/ -o output/",
+        default_model="value",
     )
     args = parser.parse_args(argv)
     input_files = _collect_input_files(args.inputs, (".json", ".yaml", ".yml"))
@@ -396,11 +436,16 @@ def main_oas(argv: list[str] | None = None) -> int:
         root_schema, node_type_names = extractor.extract(openapi_doc)
         if args.split:
             return _run_split(root_schema, node_type_names, args, api_path, search_paths, out_dir)
+        root_schema = _by_value(root_schema, node_type_names, args)
+        if root_schema is None:
+            errors += 1
+            continue
         top_name = openapi_doc.get("info", {}).get("title") or api_path.stem
         result = converter.convert_schema(root_schema, top_name, node_type_names,
                                           base_path=api_path.parent,
                                           search_paths=search_paths,
-                                          source_path=api_path)
+                                          source_path=api_path,
+                                          relationship_model=args.relationship_model)
         _report(result, args.verbose, api_path)
         if not result.data_types and not result.node_types:
             continue
@@ -458,11 +503,16 @@ def main_yang(argv: list[str] | None = None) -> int:
 
         if args.split:
             return _run_split(root_schema, node_type_names, args, yang_path, search_paths, out_dir)
+        root_schema = _by_value(root_schema, node_type_names, args)
+        if root_schema is None:
+            errors += 1
+            continue
         top_name = normalizer.module_name or yang_path.stem
         result = converter.convert_schema(root_schema, top_name, node_type_names,
                                           base_path=yang_path.parent,
                                           search_paths=search_paths,
-                                          source_path=yang_path)
+                                          source_path=yang_path,
+                                          relationship_model=args.relationship_model)
         _report(result, args.verbose, yang_path)
         if not result.data_types and not result.node_types:
             continue

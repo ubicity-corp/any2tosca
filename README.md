@@ -102,6 +102,7 @@ yang2tosca server.yang -o tosca/
 | `-o DIR`, `--output DIR` | the output directory (default: `tosca/`) |
 | `-I DIR`, `--include-dir DIR` | another directory to search for referenced schema files; repeatable |
 | `-v`, `--verbose` | list the types as they are converted |
+| `--relationship-model links\|value` | how references to node types are converted (see [What it generates](#what-it-generates)); the default is `value` for `oas2tosca` and `links` for the others |
 
 A schema that references another file becomes a TOSCA file that imports the
 other one's output, by `url` and with a `namespace`. Referenced files are
@@ -156,14 +157,22 @@ other in a cycle, are errors. See [docs/multi-output.md](docs/multi-output.md).
   identifies them: OpenAPI request bodies of `POST` operations, the Redfish
   resource a schema file defines, and top-level YANG containers and lists.
   Plain JSON Schema produces data types only.
-- **Capabilities and requirements** that let node types be connected. Every
-  node type gets a `feature` and a `containable` capability, whose types are
-  written to a companion file, `<name>_caps.yaml`, so that other files can
-  target the node type without importing it. A property whose value is another
-  node type becomes a requirement, with a `Contains` or `DependsOn`
-  relationship.
+- **Capabilities and requirements** that let node types be connected, under
+  the `links` relationship model (the default of `any2tosca`, `redfish2tosca`
+  and `yang2tosca`). Every node type gets a `feature` and a `containable`
+  capability, whose types are written to a companion file, `<name>_caps.yaml`,
+  so that other files can target the node type without importing it. A
+  property whose value is another node type becomes a requirement, with a
+  `Contains` or `DependsOn` relationship.
+- **Embedded values** under the `value` relationship model (the default of
+  `oas2tosca`), where a reference to a schema embeds a value of that schema
+  rather than linking to another resource. A property whose schema is a node
+  type's schema gets a companion data type, `<Name>Value`, with the same
+  properties as the node type `<Name>`. No capabilities, requirements or
+  `Core.yaml` import are generated.
 
-For example, an OpenAPI document whose `POST /servers` takes a `Server` produces:
+For example, an OpenAPI document whose `POST /servers` takes a `Server`
+produces, with `--relationship-model links`:
 
 ```yaml
 imports:
@@ -195,8 +204,8 @@ node_types:
 
 Node types build on four base types that any2tosca does not generate: the
 `Feature` and `Containable` capability types and the `Contains` and
-`DependsOn` relationship types. Output with node types imports them from a
-`Core.yaml` beside it, which you provide:
+`DependsOn` relationship types. Output with node types under the `links`
+relationship model imports them from a `Core.yaml` beside it, which you provide:
 
 ```yaml
 tosca_definitions_version: tosca_2_0
@@ -287,7 +296,9 @@ keywords themselves.
 `oas2tosca` converts the schemas of an OpenAPI 2.0 (`definitions`) or 3.x
 (`components.schemas`) document with the JSON Schema rules above. A schema
 used as the request body of a `POST` operation, the thing the API creates,
-becomes a node type; the rest become data types.
+becomes a node type; the rest become data types. References are converted by
+value (the `value` relationship model): a property whose schema is a node
+type's schema is typed with the companion data type `<Name>Value`.
 
 ### Redfish → TOSCA
 

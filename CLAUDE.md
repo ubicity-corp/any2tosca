@@ -36,6 +36,7 @@ This is a Python package that converts JSON Schema documents (and Redfish, OpenA
 - `any2tosca/openapi.py` — `OpenAPIExtractor`: hoists `components/schemas` (OAS 3.x) or `definitions` (Swagger 2.x) into a root JSON Schema, identifies POST request bodies as node types.
 - `any2tosca/yang.py` — `YANGNormalizer`: converts YANG `.yang` files to a JSON-Schema-like dict via `pyang`.
 - `any2tosca/split.py` — `split_schema()`: divides one normalized root schema into units (one TOSCA file each) by regex split rules, rewrites `$ref`s within/across units, rejects or merges import cycles. Used by the `--split` CLI option; units are converted with `Converter.convert_schema(..., documents=, namespaces=, node_types_by_file=)`. Design: `docs/multi-output.md`.
+- `any2tosca/companions.py` — `add_value_companions()`: the by-value pre-pass for the `value` relationship model. Each `$ref` to a node-type schema (except a node type's own `allOf` base) is pointed at a `<Name>Value` copy that converts to a data type. With `--split`, definitions the rules skip are ignored.
 - `any2tosca/yaml_utils.py` — wraps PyYAML `yaml.dump` with a custom representer for folded-style multi-line strings.
 
 **Conversion flow:**
@@ -59,6 +60,7 @@ This is a Python package that converts JSON Schema documents (and Redfish, OpenA
 - When `allOf`/`anyOf`/`oneOf` merges properties from an external file, local `#/definitions/TypeName` refs inside those properties are rewritten to `ExternalFile.json#/definitions/TypeName` so the TOSCA output uses namespaced type references and records the correct import.
 - `anyOf`/`oneOf` with versioned refs (`BaseName.vX_Y_Z`): latest versioned ref → `derived_from`; unversioned refs' properties are merged in.
 - External `$ref` type names become `namespace:TypeName`; the namespace is derived from the filename (≤8 chars, lowercase, PascalCase split, vowel-contracted).
+- Relationship model (`Converter.convert_schema(relationship_model=...)`, CLI `--relationship-model`): `links` (Redfish conventions: requirements, Feature/Containable caps, `_caps.yaml`, `Core.yaml`; default for any2tosca/redfish2tosca/yang2tosca) or `value` (none of those; by-value companions; default for oas2tosca). Design: `docs/kubernetes.md`.
 - Each input file produces its own `.yaml` output (no merging across files), unless `--split` divides one input into several files.
 
 **`old/` directory** contains a previous implementation kept for reference; it is not imported or tested.

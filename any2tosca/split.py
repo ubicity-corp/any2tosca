@@ -26,7 +26,10 @@ from typing import Any
 
 import yaml
 
-__all__ = ["SplitError", "SplitRule", "SplitRules", "Unit", "SplitResult", "load_rules", "split_schema"]
+__all__ = [
+    "SplitError", "SplitRule", "SplitRules", "Unit", "SplitResult",
+    "load_rules", "skipped_definitions", "split_schema",
+]
 
 _DEF_PREFIX = "#/definitions/"
 _NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -178,6 +181,11 @@ def _assign(definitions: dict[str, Any], rules: SplitRules) -> tuple[dict[str, _
             f"{len(unmatched)} definition(s) match no rule and there is no default_unit: {shown}"
         )
     return assigned, skipped
+
+
+def skipped_definitions(root_schema: dict[str, Any], rules: SplitRules) -> set[str]:
+    """The definition names of *root_schema* that *rules* skip."""
+    return _assign(root_schema.get("definitions") or {}, rules)[1]
 
 
 def _walk_refs(obj: Any) -> Iterable[str]:

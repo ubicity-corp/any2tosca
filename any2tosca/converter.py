@@ -51,6 +51,12 @@ class Converter:
         "null":    "string",   # TOSCA has no null; fall back to string
     }
 
+    #: Relationship models (``docs/kubernetes.md``, *Relationship model*).
+    #: ``links``: a reference to a node type is a relationship (Redfish
+    #: conventions: requirements, Feature/Containable capabilities, Core.yaml).
+    #: ``value``: a reference embeds a value; none of the Redfish conventions apply.
+    RELATIONSHIP_MODELS: tuple[str, ...] = ("links", "value")
+
     #: TOSCA 2.0 built-in primitive and collection types — never node types.
     _TOSCA_PRIMITIVES: frozenset[str] = frozenset({
         "string", "integer", "float", "boolean", "bytes", "timestamp",
@@ -84,6 +90,7 @@ class Converter:
         self._capability_types: dict[str, Any] = {}          # name → TOSCA capability type dict
         self._type_to_caps: dict[str, tuple[str, str]] = {}  # bare_type_name → (caps_ns, caps_file)
         self._node_type_names: set[str] = set() # names that are node types in this file
+        self._links: bool = True                # relationship model is "links"
         # In-memory schema set (persist across convert_schema calls until replaced)
         self._documents: dict[str, dict[str, Any]] = {}       # filename → parsed schema
         self._namespaces: dict[str, str] = {}                 # filename → namespace override
@@ -1746,7 +1753,7 @@ class Converter:
                 # Detect the Redfish Links pattern: a property named "Links"
                 # whose $ref resolves to a type also named "Links".  Expand
                 # it into core:DependsOn requirements rather than a property.
-                if (is_node_type and pname == "Links"
+                if (self._links and is_node_type and pname == "Links"
                         and isinstance(pschema, dict) and "$ref" in pschema
                         and self._parse_ref(pschema["$ref"])[1] == "Links"):
                     links_requirements.extend(
@@ -1755,7 +1762,7 @@ class Converter:
                 # Detect the Redfish Actions pattern: a property named "Actions"
                 # whose $ref resolves to a type also named "Actions".  Convert
                 # each action into a TOSCA interface operation.
-                elif (is_node_type and pname == "Actions"
+                elif (self._links and is_node_type and pname == "Actions"
                         and isinstance(pschema, dict) and "$ref" in pschema
                         and self._parse_ref(pschema["$ref"])[1] == "Actions"):
                     actions_interface = self._extract_actions_interface(
@@ -1770,7 +1777,10 @@ class Converter:
                 )
                 for pname, pschema in regular_props.items()
             }
-            if is_node_type:
+            if is_node_type and not self._links:
+                if all_props:
+                    tosca_type["properties"] = all_props
+            elif is_node_type:
                 # Properties referencing node types become TOSCA requirements.
                 plain_props, requirements = self._split_props_and_requirements(all_props)
                 requirements.extend(links_requirements)
@@ -1785,7 +1795,7 @@ class Converter:
 
         # All node types expose a type-specific Feature capability so they can be
         # targeted by DependsOn requirements via the companion caps file.
-        if is_node_type:
+        if self._links and is_node_type:
             self._imports["core"] = "Core.yaml"
             feat_name = f"{type_name}Feature"
             self._capability_types.setdefault(feat_name, {"derived_from": "core:Feature"})
@@ -1838,6 +1848,7 @@ class Converter:
         documents: Mapping[str, dict[str, Any]] | None = None,
         namespaces: Mapping[str, str] | None = None,
         node_types_by_file: Mapping[str, Collection[str]] | None = None,
+        relationship_model: str = "links",
     ) -> ConversionResult:
         """
         Convert an entire JSON Schema document to TOSCA types.
@@ -1871,12 +1882,21 @@ class Converter:
             The names of the definitions that are node types, by filename.  A
             reference into a listed file is a node-type reference exactly when
             its type name is in that file's set.
+        relationship_model:
+            ``"links"`` (default) applies the Redfish conventions: references
+            to node types become requirements, and node types get Feature and
+            Containable capabilities from ``Core.yaml``.  ``"value"`` applies
+            none of them; references are expected to be by value (see
+            :func:`any2tosca.companions.add_value_companions`).
 
         Returns
         -------
         ConversionResult
             Named tuple with ``data_types``, ``node_types``, and ``imports`` dicts.
         """
+        if relationship_model not in self.RELATIONSHIP_MODELS:
+            raise ValueError(f"unknown relationship model {relationship_model!r}")
+        self._links = relationship_model == "links"
         new_search_paths = list(search_paths) if search_paths else []
         new_documents = dict(documents) if documents else {}
         if (base_path != self._base_path or new_search_paths != self._search_paths
@@ -1942,7 +1962,8 @@ class Converter:
         # Post-processing: data types that have properties referencing node types
         # cannot be valid TOSCA data types.  Promote them to node types so the
         # node-type property references can be expressed as TOSCA requirements.
-        for name in list(data_types):
+        # (Under "value" the by-value pre-pass leaves no such references.)
+        for name in (list(data_types) if self._links else []):
             props = data_types[name].get("properties") or {}
             plain_props, requirements = self._split_props_and_requirements(props)
             if not requirements:
@@ -1958,7 +1979,7 @@ class Converter:
         # must also be node types (TOSCA does not allow a data type to derive from
         # a node type).  This covers cases like Redundancy.yaml's RedundantGroup
         # which derives from rdndncy:RedundantGroup (a node type in v1_7_0.yaml).
-        for name in list(data_types):
+        for name in (list(data_types) if self._links else []):
             derived_from = data_types[name].get("derived_from", "")
             if derived_from and self._is_node_type_tosca(derived_from):
                 dtype = data_types.pop(name)
@@ -2019,7 +2040,7 @@ class Converter:
 
         # Every node type can be the target of a core:Contains requirement,
         # so add a type-specific Containable capability to all of them.
-        if node_types:
+        if self._links and node_types:
             self._imports["core"] = "Core.yaml"
             caps_file = self._caps_file_for(self._current_filename) if self._current_filename else "caps.yaml"
             caps_ns = self._namespace_for(caps_file)
@@ -2077,11 +2098,13 @@ def convert_schema(
     documents: Mapping[str, dict[str, Any]] | None = None,
     namespaces: Mapping[str, str] | None = None,
     node_types_by_file: Mapping[str, Collection[str]] | None = None,
+    relationship_model: str = "links",
 ) -> ConversionResult:
     return Converter().convert_schema(root_schema, top_level_name, node_type_names,
                                       base_path, search_paths, source_path,
                                       documents=documents, namespaces=namespaces,
-                                      node_types_by_file=node_types_by_file)
+                                      node_types_by_file=node_types_by_file,
+                                      relationship_model=relationship_model)
 
 
 def build_tosca_document(

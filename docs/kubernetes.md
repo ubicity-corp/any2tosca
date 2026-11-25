@@ -89,12 +89,16 @@ For OpenAPI input, references are by value:
 - No data type is promoted to a node type because of the properties it holds.
 
 Companions are made by a **pre-pass over the schema**, before the split and
-before conversion. For every `$ref` to a node-type schema, except one in the
-`allOf` of another node-type schema (which is inheritance), the pre-pass adds a
+before conversion. References from definitions that the split rules skip do not
+count, so the skipped `*List` kinds create no companions. For every other `$ref`
+to a node-type schema, except one in the `allOf` of another node-type schema
+(which is inheritance), the pre-pass adds a
 definition named after the node-type definition with `Value` appended
 (`io.k8s.api.core.v1.PersistentVolumeClaimValue`), a copy of the node-type schema,
-and points the `$ref` at it. A companion name that already exists as a definition is an error. After the
-pre-pass, no schema references a node-type schema by value. The split rules place
+and points the `$ref` at it. References inside a companion are processed the
+same way, so a companion's base is the base's companion. A companion name that
+already exists as a definition is an error. After the pre-pass, no kept schema
+references a node-type schema by value. The split rules place
 the companion with its node type, because both names share the same prefix.
 
 In 1.37 the one case outside the `*List` kinds is `StatefulSetSpec.volumeClaimTemplates`,
