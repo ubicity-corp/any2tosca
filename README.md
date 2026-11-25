@@ -155,7 +155,8 @@ other in a cycle, are errors. See [docs/multi-output.md](docs/multi-output.md).
   `$ref` in `allOf`, `anyOf` or `oneOf`); scalars derive from their TOSCA
   primitive type.
 - **Node types** for the schemas that describe resources, as each format
-  identifies them: OpenAPI request bodies of `POST` operations, the Redfish
+  identifies them: OpenAPI request bodies of `POST` operations on paths that
+  also support `GET`, the Redfish
   resource a schema file defines, and top-level YANG containers and lists.
   Plain JSON Schema produces data types only. A node-type property marked
   `readOnly: true`, a value the system sets rather than one the template
@@ -174,8 +175,8 @@ other in a cycle, are errors. See [docs/multi-output.md](docs/multi-output.md).
   properties as the node type `<Name>`. No capabilities, requirements or
   `Core.yaml` import are generated.
 
-For example, an OpenAPI document whose `POST /servers` takes a `Server`
-produces, with `--relationship-model links`:
+For example, an OpenAPI document whose `POST /servers` takes a `Server`, and
+whose `GET /servers` lists them, produces, with `--relationship-model links`:
 
 ```yaml
 imports:
@@ -298,8 +299,10 @@ keywords themselves.
 
 `oas2tosca` converts the schemas of an OpenAPI 2.0 (`definitions`) or 3.x
 (`components.schemas`) document with the JSON Schema rules above. A schema
-used as the request body of a `POST` operation, the thing the API creates,
-becomes a node type; the rest become data types. References are converted by
+used as the request body of a `POST` to a path that also supports `GET`, a
+resource the API creates and can return, becomes a node type; the rest become
+data types. A schema posted only to a path without `GET` is a request to
+perform an action, and becomes a data type. References are converted by
 value (the `value` relationship model): a property whose schema is a node
 type's schema is typed with the companion data type `<Name>Value`.
 

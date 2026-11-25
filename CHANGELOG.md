@@ -21,6 +21,10 @@ What changed in each release, and what to do about it.
 - **`readOnly` becomes an attribute.** A node-type property whose schema has
   `readOnly: true` is converted to a TOSCA attribute (without `required`)
   instead of a property, in every command. Data types are unchanged.
+- **OpenAPI node types are resources.** A request body becomes a node type
+  only when it is posted to a path that also supports `GET`. Bodies posted
+  only to action paths (such as a Kubernetes `pods/{name}/binding`) become
+  data types.
 - **`oas2tosca` now defaults to `value`.** Its output no longer has
   capabilities, requirements, `_caps.yaml` files or a `Core.yaml` import, and
   data types holding a node type's schema stay data types. Pass

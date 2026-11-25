@@ -31,6 +31,7 @@ OA3_DOC = {
     },
     "paths": {
         "/servers": {
+            "get": {},
             "post": {
                 "requestBody": {
                     "content": {
@@ -135,6 +136,7 @@ OA2_DOC = {
     },
     "paths": {
         "/widgets": {
+            "get": {},
             "post": {
                 "parameters": [
                     {
@@ -176,3 +178,32 @@ def test_end_to_end_2x():
     result = Converter().convert_schema(root, "api", node_type_names)
     assert "Widget" in result.node_types
     assert "Error" in result.data_types
+
+
+# ── Node types: POST bodies on paths that also support GET ────────────────────
+
+def test_3x_post_only_path_is_an_action_not_a_resource():
+    doc = {**OA3_DOC, "paths": {"/servers": {"post": OA3_DOC["paths"]["/servers"]["post"]}}}
+    _, node_type_names = e.extract(doc)
+    assert node_type_names == set()
+
+
+def test_2x_post_only_path_is_an_action_not_a_resource():
+    post = OA2_DOC["paths"]["/widgets"]["post"]
+    doc = {**OA2_DOC, "paths": {
+        "/widgets/{name}/binding": {"post": post},   # a subresource action
+        "/widgets": {"get": {}},                     # readable, but nothing posted
+    }}
+    _, node_type_names = e.extract(doc)
+    assert node_type_names == set()
+
+
+def test_2x_mixed_paths_only_resource_collection_counts():
+    widget_post = OA2_DOC["paths"]["/widgets"]["post"]
+    error_post = {"parameters": [{"in": "body", "name": "b", "schema": {"$ref": "#/definitions/Error"}}]}
+    doc = {**OA2_DOC, "paths": {
+        "/widgets": {"get": {}, "post": widget_post},
+        "/reviews": {"post": error_post},
+    }}
+    _, node_type_names = e.extract(doc)
+    assert node_type_names == {"Widget"}

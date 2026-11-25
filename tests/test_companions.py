@@ -180,8 +180,8 @@ _OAS = {
     "swagger": "2.0",
     "info": {"title": "x", "version": "1"},
     "paths": {
-        "/claims": {"post": {"parameters": [{"in": "body", "name": "b", "schema": _ref("Claim")}]}},
-        "/sets": {"post": {"parameters": [{"in": "body", "name": "b", "schema": _ref("Set")}]}},
+        "/claims": {"get": {}, "post": {"parameters": [{"in": "body", "name": "b", "schema": _ref("Claim")}]}},
+        "/sets": {"get": {}, "post": {"parameters": [{"in": "body", "name": "b", "schema": _ref("Set")}]}},
     },
     "definitions": ROOT["definitions"],
 }

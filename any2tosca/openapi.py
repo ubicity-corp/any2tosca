@@ -2,7 +2,8 @@
 openapi.py
 ----------
 Pre-processor that extracts JSON Schema from OpenAPI 2.0 and 3.x documents
-and identifies which schemas should become TOSCA node types.
+and identifies which schemas should become TOSCA node types: those posted to
+a path that also supports GET.
 """
 
 from __future__ import annotations
@@ -33,7 +34,10 @@ class OpenAPIExtractor:
         Convert an OpenAPI document into a normalized JSON Schema dict and
         a set of schema names that should become TOSCA node types.
 
-        Schemas referenced in POST request bodies are classified as node types.
+        A schema becomes a node type when it is the request body of a ``POST``
+        to a path that also supports ``GET``: a collection whose entries
+        clients create and read back.  A schema posted only to a path without
+        ``GET`` is a request to perform an action, not a resource.
 
         Returns
         -------
@@ -75,10 +79,18 @@ class OpenAPIExtractor:
             return [self._rewrite_refs_3x(item) for item in obj]
         return obj
 
+    @staticmethod
+    def _resource_paths(doc: dict[str, Any]) -> list[dict[str, Any]]:
+        """Path items that create and read back resources: both POST and GET."""
+        return [
+            item for item in (doc.get("paths") or {}).values()
+            if isinstance(item, dict) and "post" in item and "get" in item
+        ]
+
     def _post_schema_names_3x(self, doc: dict[str, Any]) -> set[str]:
-        """Return schema names used as POST requestBody schemas (OpenAPI 3.x)."""
+        """Return schema names posted as requestBody to a resource path (OpenAPI 3.x)."""
         names: set[str] = set()
-        for path_item in doc.get("paths", {}).values():
+        for path_item in self._resource_paths(doc):
             post = path_item.get("post", {})
             for media in post.get("requestBody", {}).get("content", {}).values():
                 ref = media.get("schema", {}).get("$ref", "")
@@ -98,9 +110,9 @@ class OpenAPIExtractor:
         return root_schema, node_type_names
 
     def _post_schema_names_2x(self, doc: dict[str, Any]) -> set[str]:
-        """Return schema names used as POST body parameters (OpenAPI 2.0)."""
+        """Return schema names posted as body parameters to a resource path (OpenAPI 2.0)."""
         names: set[str] = set()
-        for path_item in doc.get("paths", {}).values():
+        for path_item in self._resource_paths(doc):
             for param in path_item.get("post", {}).get("parameters", []):
                 if param.get("in") == "body":
                     ref = param.get("schema", {}).get("$ref", "")

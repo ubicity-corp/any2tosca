@@ -243,7 +243,7 @@ def test_merge_cycles_merges_into_first_unit():
 _OAS = {
     "swagger": "2.0",
     "info": {"title": "x", "version": "1"},
-    "paths": {"/deployments": {"post": {"parameters": [
+    "paths": {"/deployments": {"get": {}, "post": {"parameters": [
         {"in": "body", "name": "body", "schema": {"$ref": "#/definitions/io.x.apps.v1.Deployment"}},
     ]}}},
     "definitions": ROOT["definitions"],
