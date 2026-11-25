@@ -1,7 +1,8 @@
 # Kubernetes Conversion
 
-**Status:** Implemented (`oas2tosca --kubernetes`). The baseline comparison under
-[Testing](#testing) is still to be done.
+**Status:** Implemented (`oas2tosca --kubernetes`). The 1.35 baseline comparison is
+recorded under [Baseline comparison (1.35)](#baseline-comparison-135); its open
+findings are not yet fixed.
 
 `oas2tosca --kubernetes` converts the Kubernetes OpenAPI specification
 (`api/openapi-spec/swagger.json` in the Kubernetes repository) into the generated
@@ -326,3 +327,75 @@ Comparing the result of the new generator with the published profile:
 2. **Then 1.37**, the current stable release, as a new profile version
    `io.kubernetes:1.37`. The split rules hold for both versions; only the counts
    differ.
+
+---
+
+## Baseline comparison (1.35)
+
+`oas2tosca --kubernetes` on the 1.35 specification, compared unit by unit with
+the unmodified `oas2tosca` output in `tosca-community-contributions`
+(`profiles/io/k8s/`): types, node or data kind, `derived_from`, type and
+property metadata, and per property the type, entry and key schemas,
+`required`, default and validation. Descriptions and formatting are not
+compared. Run 2026-11-25.
+
+### Differences the design predicts
+
+| Difference | Count |
+|---|---|
+| `in_range` validation gone; every one came from `format: int32` / `int64` (the specification has no `minimum` or `maximum` on these) | 184 properties |
+| `apiVersion` and `kind` properties removed from resources | 57 node types |
+| `status` an attribute | 26 node types |
+| Action requests a data type: `Binding`, `Eviction`, `TokenRequest`, the six reviews, and `Scale` (a `PUT`-only body, a node type in `oas2tosca`) | 10 types |
+| `volumeClaimTemplates` typed `core:PersistentVolumeClaimValue` | 1 property |
+| Core group `group: ''` (empty in the baseline) | every core kind |
+| `autoscaling/v2` `HorizontalPodAutoscaler` replaces `v1`: four properties differ, `currentReplicas` is optional, and 19 `v2` data types are new | 1 type |
+| `x-kubernetes-map-type` metadata, which `oas2tosca` did not copy | 26 types, 7 properties |
+| `io.k8s.apimachinery.pkg.version` not produced (skipped by the rules) | 1 profile |
+
+### Baseline defects the regeneration corrects
+
+- **`resource.k8s.io` references to `Quantity` had no namespace** (`Quantity`
+  instead of `resource:Quantity`): 9 properties, which do not resolve in the
+  baseline.
+- **`PersistentVolumeClaim` was a data type** in the baseline. It is a node type.
+- **`DeleteOptions` kept only the first of its 62 group-version-kinds**, as a
+  map. All of them are kept, as a list.
+
+### Open findings
+
+1. **The splitter drops a property named `$ref`.** `JSONSchemaProps` (the schema
+   of a custom resource's schema, `apiextensions`) has a property called `$ref`.
+   The splitter's reference rewriting treats every `$ref` key as a reference and
+   loses this one. The converter and the by-value pre-pass keep it. Proposed fix:
+   treat `$ref` as a reference only when its value is a string, and test a
+   property named `$ref` through the split.
+2. **Property names are sanitized.** The seven `JSONSchemaProps` properties
+   named `x-kubernetes-...` become `x_kubernetes_...`, which changes the field
+   name a manifest built from them would carry. `sanitize_name` replaces `-`,
+   `.` and spaces in type **and** property names for every input format,
+   including YANG, whose leaf names commonly contain `-`. Proposed fix: sanitize
+   type names only and keep property names as the schema spells them, which
+   changes the YANG output for every dash-named leaf. Needs a decision.
+3. **Group-version-kind stays a list on data types.** The normalizer collapses
+   the single-entry list on node types only, so the action requests, `Binding`,
+   `Eviction` and `Scale` (11 data types) keep a one-entry list while every
+   node type has a map. Proposed fix: collapse every single-entry list,
+   whatever the type, and keep multi-entry lists (`DeleteOptions`,
+   `WatchEvent`).
+4. **Untyped definitions become empty data types.** `apiextensions` `JSON`,
+   `JSONSchemaPropsOrArray`, `JSONSchemaPropsOrBool` and
+   `JSONSchemaPropsOrStringArray` describe any JSON value and have no `type`.
+   They convert to a data type with no `derived_from` and no properties. The
+   baseline derives them from `string`, which is also what the converter does
+   for an untyped property. Proposed fix: a definition with no `type`,
+   no properties and no composition derives from `string`, in every format.
+   Needs a decision.
+5. **15 more data types than the baseline.** `oas2tosca` emitted only the types
+   reachable from a resource; `any2tosca` emits every kept definition. The extra
+   ones are API response and discovery types: `meta` `Status`, `StatusCause`,
+   `StatusDetails`, `WatchEvent`, `APIGroup`, `APIResource`, `APIVersions`,
+   `GroupVersionForDiscovery`, `ServerAddressByClientCIDR`, `GroupResource`,
+   `ListMeta`, `Patch`, and `core` `ComponentStatus` and `ComponentCondition`,
+   plus `PersistentVolumeClaimValue`. They are complete and harmless. Proposed:
+   keep them. Skipping them would take one rule each.
