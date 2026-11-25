@@ -10,6 +10,7 @@ __author__ = "Chris Lauwers"
 __copyright__ = "Copyright (c) 2022-2026, Ubicity Corp."
 __email__ = "info@ubicity.com"
 
+import copy
 import json
 import re
 import sys
@@ -91,6 +92,7 @@ class Converter:
         self._type_to_caps: dict[str, tuple[str, str]] = {}  # bare_type_name → (caps_ns, caps_file)
         self._node_type_names: set[str] = set() # names that are node types in this file
         self._links: bool = True                # relationship model is "links"
+        self._extension_metadata: tuple[str, ...] = ()  # x- keys copied into metadata
         # In-memory schema set (persist across convert_schema calls until replaced)
         self._documents: dict[str, dict[str, Any]] = {}       # filename → parsed schema
         self._namespaces: dict[str, str] = {}                 # filename → namespace override
@@ -1535,6 +1537,13 @@ class Converter:
             return safe_name
         return self.get_tosca_type(json_type, schema, root_schema)
 
+    def _extension_metadata_of(self, schema: Any) -> dict[str, Any] | None:
+        """The ``extension_metadata`` keys present in *schema*, copied, or None."""
+        if not self._extension_metadata or not isinstance(schema, dict):
+            return None
+        found = {k: copy.deepcopy(schema[k]) for k in self._extension_metadata if k in schema}
+        return found or None
+
     def schema_to_property(
         self,
         prop_name: str,
@@ -1543,7 +1552,29 @@ class Converter:
         root_schema: dict[str, Any],
         data_types: dict[str, Any],
     ) -> dict[str, Any]:
-        """Convert a single JSON Schema property definition to a TOSCA property dict."""
+        """Convert a single JSON Schema property definition to a TOSCA property dict.
+
+        Extension keys listed in ``extension_metadata`` are copied from the
+        property's own schema (not from a schema it references) into the
+        property's ``metadata``.
+        """
+        prop_def = self._schema_to_property_def(
+            prop_name, prop_schema, required_props, root_schema, data_types
+        )
+        metadata = self._extension_metadata_of(prop_schema)
+        if metadata:
+            prop_def["metadata"] = metadata
+        return prop_def
+
+    def _schema_to_property_def(
+        self,
+        prop_name: str,
+        prop_schema: dict[str, Any],
+        required_props: list[str],
+        root_schema: dict[str, Any],
+        data_types: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Implementation of :meth:`schema_to_property`, without extension metadata."""
         # allOf / anyOf / oneOf → merge sub-schemas first
         if any(k in prop_schema for k in ("allOf", "anyOf", "oneOf")):
             prop_schema, allof_type = self._merge_allof(prop_schema, root_schema)
@@ -1731,6 +1762,8 @@ class Converter:
         is_node_type: bool = False,
     ) -> dict[str, Any]:
         """Shared implementation for data-type and node-type conversion."""
+        # Extension metadata comes from the definition itself, not its bases.
+        metadata = self._extension_metadata_of(schema)
         schema, derived_from = self._merge_allof(schema, root_schema)
 
         tosca_type: dict[str, Any] = {}
@@ -1741,6 +1774,9 @@ class Converter:
 
         if derived_from:
             tosca_type["derived_from"] = derived_from
+
+        if metadata:
+            tosca_type["metadata"] = metadata
 
         properties_schema = schema.get("properties", {})
         required_list: list[str] = schema.get("required", [])
@@ -1849,6 +1885,7 @@ class Converter:
         namespaces: Mapping[str, str] | None = None,
         node_types_by_file: Mapping[str, Collection[str]] | None = None,
         relationship_model: str = "links",
+        extension_metadata: Collection[str] = (),
     ) -> ConversionResult:
         """
         Convert an entire JSON Schema document to TOSCA types.
@@ -1888,6 +1925,11 @@ class Converter:
             Containable capabilities from ``Core.yaml``.  ``"value"`` applies
             none of them; references are expected to be by value (see
             :func:`any2tosca.companions.add_value_companions`).
+        extension_metadata:
+            Schema keys (typically vendor extensions, ``x-...``) to copy into
+            TOSCA ``metadata``: from a definition into its type, and from a
+            property's schema into the property.  Values are copied as they
+            are (lists and maps stay lists and maps).
 
         Returns
         -------
@@ -1897,6 +1939,7 @@ class Converter:
         if relationship_model not in self.RELATIONSHIP_MODELS:
             raise ValueError(f"unknown relationship model {relationship_model!r}")
         self._links = relationship_model == "links"
+        self._extension_metadata = tuple(extension_metadata)
         new_search_paths = list(search_paths) if search_paths else []
         new_documents = dict(documents) if documents else {}
         if (base_path != self._base_path or new_search_paths != self._search_paths
@@ -2099,12 +2142,14 @@ def convert_schema(
     namespaces: Mapping[str, str] | None = None,
     node_types_by_file: Mapping[str, Collection[str]] | None = None,
     relationship_model: str = "links",
+    extension_metadata: Collection[str] = (),
 ) -> ConversionResult:
     return Converter().convert_schema(root_schema, top_level_name, node_type_names,
                                       base_path, search_paths, source_path,
                                       documents=documents, namespaces=namespaces,
                                       node_types_by_file=node_types_by_file,
-                                      relationship_model=relationship_model)
+                                      relationship_model=relationship_model,
+                                      extension_metadata=extension_metadata)
 
 
 def build_tosca_document(

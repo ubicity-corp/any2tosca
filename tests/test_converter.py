@@ -1041,3 +1041,80 @@ def test_dotted_node_type_names_become_node_types():
     root = {"definitions": {"io.x.v1.Pod": {"type": "object", "properties": {"name": {"type": "string"}}}}}
     result = Converter().convert_schema(root, "x", {"io.x.v1.Pod"})
     assert set(result.node_types) == {"io_x_v1_Pod"}
+
+
+# ── Extension metadata ────────────────────────────────────────────────────────
+
+_GVK = [{"group": "apps", "kind": "Deployment", "version": "v1"}]
+_EXT_ROOT = {"definitions": {
+    "Base": {"type": "object", "x-base": "b", "properties": {"id": {"type": "string"}}},
+    "Deployment": {
+        "type": "object",
+        "x-kubernetes-group-version-kind": _GVK,
+        "x-unlisted": 1,
+        "allOf": [{"$ref": "#/definitions/Base"}],
+        "properties": {
+            "conditions": {
+                "type": "array",
+                "items": {"type": "string"},
+                "x-kubernetes-list-type": "map",
+                "x-kubernetes-list-map-keys": ["type"],
+            },
+            "spec": {"$ref": "#/definitions/Spec"},
+            "plain": {"type": "string"},
+        },
+    },
+    "Spec": {"type": "object", "x-kubernetes-map-type": "atomic", "properties": {}},
+}}
+_EXT_KEYS = ["x-kubernetes-group-version-kind", "x-kubernetes-list-type",
+             "x-kubernetes-list-map-keys", "x-kubernetes-map-type", "x-base"]
+
+
+def _ext_convert(keys=_EXT_KEYS):
+    return Converter().convert_schema(_EXT_ROOT, "x", {"Deployment"}, extension_metadata=keys,
+                                      relationship_model="value")
+
+
+def test_extension_metadata_on_type_keeps_yaml_values():
+    dep = _ext_convert().node_types["Deployment"]
+    assert dep["metadata"] == {"x-kubernetes-group-version-kind": _GVK}
+
+
+def test_extension_metadata_on_property():
+    props = _ext_convert().node_types["Deployment"]["properties"]
+    assert props["conditions"]["metadata"] == {
+        "x-kubernetes-list-type": "map", "x-kubernetes-list-map-keys": ["type"],
+    }
+    assert "metadata" not in props["plain"]
+
+
+def test_extension_metadata_not_taken_from_referenced_schema():
+    result = _ext_convert()
+    assert "metadata" not in result.node_types["Deployment"]["properties"]["spec"]
+    assert result.data_types["Spec"]["metadata"] == {"x-kubernetes-map-type": "atomic"}
+
+
+def test_extension_metadata_not_inherited_from_base():
+    assert "x-base" not in _ext_convert().node_types["Deployment"]["metadata"]
+
+
+def test_extension_metadata_off_by_default():
+    result = Converter().convert_schema(_EXT_ROOT, "x", {"Deployment"})
+    assert "metadata" not in result.node_types["Deployment"]
+
+
+def test_extension_metadata_values_are_copies():
+    dep = _ext_convert().node_types["Deployment"]
+    dep["metadata"]["x-kubernetes-group-version-kind"][0]["group"] = "changed"
+    assert _GVK[0]["group"] == "apps"
+
+
+def test_cli_extension_metadata_option(tmp_path):
+    schema = tmp_path / "s.json"
+    schema.write_text(json.dumps({"title": "S", "type": "object", "x-owner": "team",
+                                  "properties": {"a": {"type": "string", "x-owner": "me"}}}))
+    out = tmp_path / "out"
+    assert main_json([str(schema), "--extension-metadata", "x-owner", "-o", str(out)]) == 0
+    doc = yaml.safe_load((out / "s.yaml").read_text())
+    assert doc["data_types"]["S"]["metadata"] == {"x-owner": "team"}
+    assert doc["data_types"]["S"]["properties"]["a"]["metadata"] == {"x-owner": "me"}

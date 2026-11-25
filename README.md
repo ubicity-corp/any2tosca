@@ -102,6 +102,7 @@ yang2tosca server.yang -o tosca/
 | `-o DIR`, `--output DIR` | the output directory (default: `tosca/`) |
 | `-I DIR`, `--include-dir DIR` | another directory to search for referenced schema files; repeatable |
 | `-v`, `--verbose` | list the types as they are converted |
+| `--extension-metadata KEY` | copy schema key `KEY` (typically a vendor extension, `x-...`) into the `metadata` of the type or property it appears on; repeatable |
 | `--relationship-model links\|value` | how references to node types are converted (see [What it generates](#what-it-generates)); the default is `value` for `oas2tosca` and `links` for the others |
 
 A schema that references another file becomes a TOSCA file that imports the
@@ -340,10 +341,10 @@ YANG integer types (`int8`–`int64`, `uint8`–`uint64`) map to TOSCA `integer`
   `discriminator`. The values they constrain are converted; the constraints
   they add are not.
 - **Kubernetes:** the Kubernetes OpenAPI definitions convert like any other
-  OpenAPI document, and `--split` divides them into one file per API group.
-  The Kubernetes conventions (which schemas are resources, the `x-kubernetes-*`
-  extensions, by-value references between resources) are not yet supported;
-  see [docs/kubernetes.md](docs/kubernetes.md).
+  OpenAPI document: `--split` divides them into one file per API group, and
+  `--extension-metadata` carries the `x-kubernetes-*` extensions. A Kubernetes
+  preset (packaged split rules, which schemas are resources, the resource
+  adjustments) is not yet available; see [docs/kubernetes.md](docs/kubernetes.md).
 
 ## Python API
 

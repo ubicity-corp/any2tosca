@@ -74,6 +74,14 @@ def _make_parser(
              "requirements and adds the Core.yaml capabilities; 'value' treats them "
              f"as embedded values (default: {default_model}).",
     )
+    parser.add_argument(
+        "--extension-metadata",
+        action="append",
+        default=[],
+        metavar="KEY",
+        help="Copy schema key KEY (typically a vendor extension, x-...) into the TOSCA "
+             "metadata of the type or property it appears on; repeatable.",
+    )
     split = parser.add_argument_group("multi-output (one input, several TOSCA files)")
     split.add_argument(
         "--split",
@@ -184,6 +192,7 @@ def _run_split(
             namespaces=split.namespaces,
             node_types_by_file=split.node_types_by_file,
             relationship_model=args.relationship_model,
+            extension_metadata=args.extension_metadata,
         )
         _report(result, args.verbose, Path(unit.tosca_file))
         out_path = _write_file(result, unit.name, out_dir)
@@ -299,7 +308,8 @@ def main_json(argv: list[str] | None = None) -> int:
         top_name = root_schema.get("title") or schema_path.stem
         result = convert_schema(root_schema, top_name, base_path=schema_path.parent,
                                 search_paths=search_paths, source_path=schema_path,
-                                relationship_model=args.relationship_model)
+                                relationship_model=args.relationship_model,
+                                extension_metadata=args.extension_metadata)
         _report(result, args.verbose, schema_path)
         if not result.data_types and not result.node_types:
             continue
@@ -371,7 +381,8 @@ def main_redfish(argv: list[str] | None = None) -> int:
                                           base_path=schema_path.parent,
                                           search_paths=search_paths,
                                           source_path=schema_path,
-                                          relationship_model=args.relationship_model)
+                                          relationship_model=args.relationship_model,
+                                          extension_metadata=args.extension_metadata)
         _report(result, args.verbose, schema_path)
         if not result.data_types and not result.node_types:
             continue
@@ -445,7 +456,8 @@ def main_oas(argv: list[str] | None = None) -> int:
                                           base_path=api_path.parent,
                                           search_paths=search_paths,
                                           source_path=api_path,
-                                          relationship_model=args.relationship_model)
+                                          relationship_model=args.relationship_model,
+                                          extension_metadata=args.extension_metadata)
         _report(result, args.verbose, api_path)
         if not result.data_types and not result.node_types:
             continue
@@ -512,7 +524,8 @@ def main_yang(argv: list[str] | None = None) -> int:
                                           base_path=yang_path.parent,
                                           search_paths=search_paths,
                                           source_path=yang_path,
-                                          relationship_model=args.relationship_model)
+                                          relationship_model=args.relationship_model,
+                                          extension_metadata=args.extension_metadata)
         _report(result, args.verbose, yang_path)
         if not result.data_types and not result.node_types:
             continue

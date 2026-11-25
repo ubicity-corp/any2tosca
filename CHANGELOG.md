@@ -14,6 +14,10 @@ What changed in each release, and what to do about it.
   and the `Core.yaml` import. `value` treats a reference as an embedded value:
   a property whose schema is a node type's schema is typed with a companion
   data type `<Name>Value`, and none of the `links` additions are generated.
+- **Extension metadata.** `--extension-metadata KEY` (repeatable) copies a
+  schema key, typically a vendor extension such as `x-kubernetes-list-type`,
+  into the `metadata` of the type or property it appears on. Values are kept
+  as YAML lists and maps.
 - **`oas2tosca` now defaults to `value`.** Its output no longer has
   capabilities, requirements, `_caps.yaml` files or a `Core.yaml` import, and
   data types holding a node type's schema stay data types. Pass

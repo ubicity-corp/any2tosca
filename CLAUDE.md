@@ -61,6 +61,7 @@ This is a Python package that converts JSON Schema documents (and Redfish, OpenA
 - `anyOf`/`oneOf` with versioned refs (`BaseName.vX_Y_Z`): latest versioned ref → `derived_from`; unversioned refs' properties are merged in.
 - External `$ref` type names become `namespace:TypeName`; the namespace is derived from the filename (≤8 chars, lowercase, PascalCase split, vowel-contracted).
 - Relationship model (`Converter.convert_schema(relationship_model=...)`, CLI `--relationship-model`): `links` (Redfish conventions: requirements, Feature/Containable caps, `_caps.yaml`, `Core.yaml`; default for any2tosca/redfish2tosca/yang2tosca) or `value` (none of those; by-value companions; default for oas2tosca). Design: `docs/kubernetes.md`.
+- Extension metadata (`convert_schema(extension_metadata=[...])`, CLI `--extension-metadata KEY`): listed keys are copied into TOSCA `metadata` from a definition's own schema (not its `allOf` bases) and from a property's own schema (not from the schema it `$ref`s).
 - Each input file produces its own `.yaml` output (no merging across files), unless `--split` divides one input into several files.
 
 **`old/` directory** contains a previous implementation kept for reference; it is not imported or tested.
