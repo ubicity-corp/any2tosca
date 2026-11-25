@@ -267,11 +267,9 @@ design covers two of the items:
 | Resources become node types (`x-kubernetes-group-version-kind`) | Not covered: Kubernetes normalizer |
 | Group-version-kind and `x-kubernetes-list-*` written to metadata | Not covered: extension-to-metadata option |
 
-Once all five rows are covered, together with the options for the Redfish
-post-processing above, `any2tosca` produces in one step what
-`GENERATING.md` Part 1, Steps 2 and 3, and Part 2, Step 1, produce today
-(generation with `oas2tosca`, copying the per-group files into place, and the
-v1.3 → v2.0 conversion). The remaining hand-written steps of Part 2 (inheritance,
+With all five rows covered, together with the options for the Redfish
+post-processing above, `any2tosca` produces the generated part of the profile in
+one step (`GENERATING.md` Part 1). The hand-written steps of Part 2 (inheritance,
 capabilities and requirements, lifecycle wiring) are outside this design.
 
 ---

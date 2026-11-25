@@ -15,10 +15,10 @@ schemas become node types, how references between resources are converted, which
 Kubernetes extensions reach the output, and the Kubernetes-specific adjustments to
 resource types.
 
-Once both designs are implemented, `any2tosca` produces in one step what
-`GENERATING.md` (in the profile) Part 1 and Part 2, Steps 1 to 3, produce today
-from `oas2tosca` output plus hand edits, and the separate `oas2tosca` repository is
-deleted.
+`any2tosca` produces the generated part of the profile in one step
+(`GENERATING.md` in the profile, Part 1), replacing `oas2tosca` output plus the
+hand edits that converted it to TOSCA 2.0 and fixed it. The separate `oas2tosca`
+repository is deleted once the published profile is regenerated.
 
 The numbers below are from the 1.37 specification, the current stable release:
 862 definitions, 203 of them carrying `x-kubernetes-group-version-kind`. The 1.35
@@ -168,8 +168,7 @@ The specification gives group-version-kind as a list. The normalizer replaces a
 one-entry list by its entry, so the metadata is a map, as in the published
 profile. Every node type has one entry; `DeleteOptions` and `WatchEvent`, data
 types with one entry per API group, keep the list. The core group is the empty string and is
-written as `group: ''`, which makes the `GENERATING.md` Step 2 "empty values"
-hand fix unnecessary.
+written as `group: ''`, a valid empty value, so it needs no hand fix.
 
 ---
 
@@ -242,9 +241,8 @@ schema it also:
    in `ObjectReference` or `OwnerReference`, `kind` is a real field.
 2. Sets `readOnly: true` on the `status` property, so it becomes an attribute.
 
-These two steps are the generated half of `GENERATING.md` Part 2, Step 3. The rest
-of that step (the `Resource` base type and its `cluster` requirement) stays
-hand-written.
+The rest of the `Resource` base type (`GENERATING.md` Part 2, Step 2: the type
+itself and its `cluster` requirement) stays hand-written.
 
 The normalizer returns the extractor's `(root_schema, node_type_names)` modified,
 the same interface `RedfishNormalizer` has. It adds no node types of its own.
