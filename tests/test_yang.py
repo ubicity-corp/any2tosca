@@ -265,3 +265,22 @@ def test_cli_yang_default_output(yang_file, tmp_path, monkeypatch):
     rc = main_yang([str(yang_file)])
     assert rc == 0
     assert (tmp_path / "tosca" / "test-server.yaml").exists()
+
+
+# ── Relationship model default ────────────────────────────────────────────────
+
+def test_cli_yang_defaults_to_value_model(yang_file, tmp_path):
+    out_dir = tmp_path / "out"
+    assert main_yang([str(yang_file), "-o", str(out_dir)]) == 0
+    assert sorted(p.name for p in out_dir.iterdir()) == ["test-server.yaml"]
+    doc = yaml.safe_load((out_dir / "test-server.yaml").read_text())
+    assert "imports" not in doc
+    assert all("capabilities" not in nt for nt in doc["node_types"].values())
+
+
+def test_cli_yang_links_model_on_request(yang_file, tmp_path):
+    out_dir = tmp_path / "out"
+    assert main_yang([str(yang_file), "--relationship-model", "links", "-o", str(out_dir)]) == 0
+    assert (out_dir / "test-server_caps.yaml").exists()
+    doc = yaml.safe_load((out_dir / "test-server.yaml").read_text())
+    assert {"url": "Core.yaml", "namespace": "core"} in doc["imports"]

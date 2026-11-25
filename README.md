@@ -103,7 +103,7 @@ yang2tosca server.yang -o tosca/
 | `-I DIR`, `--include-dir DIR` | another directory to search for referenced schema files; repeatable |
 | `-v`, `--verbose` | list the types as they are converted |
 | `--extension-metadata KEY` | copy schema key `KEY` (typically a vendor extension, `x-...`) into the `metadata` of the type or property it appears on; repeatable |
-| `--relationship-model links\|value` | how references to node types are converted (see [What it generates](#what-it-generates)); the default is `value` for `oas2tosca` and `links` for the others |
+| `--relationship-model links\|value` | how references to node types are converted (see [What it generates](#what-it-generates)); the default is `links` for `redfish2tosca` and `value` for the others |
 | `--profile NAME:VERSION` | also write `profile.yaml`, importing every file the run writes in dependency order, and `TOSCA.meta`, so the output directory is a profile; a warning names any imported file the run did not write (such as `Core.yaml`) |
 
 A schema that references another file becomes a TOSCA file that imports the
@@ -162,14 +162,14 @@ other in a cycle, are errors. See [docs/multi-output.md](docs/multi-output.md).
   `readOnly: true`, a value the system sets rather than one the template
   supplies, becomes an **attribute** instead of a property.
 - **Capabilities and requirements** that let node types be connected, under
-  the `links` relationship model (the default of `any2tosca`, `redfish2tosca`
-  and `yang2tosca`). Every node type gets a `feature` and a `containable`
+  the `links` relationship model (the default of `redfish2tosca`). Every node
+  type gets a `feature` and a `containable`
   capability, whose types are written to a companion file, `<name>_caps.yaml`,
   so that other files can target the node type without importing it. A
   property whose value is another node type becomes a requirement, with a
   `Contains` or `DependsOn` relationship.
 - **Embedded values** under the `value` relationship model (the default of
-  `oas2tosca`), where a reference to a schema embeds a value of that schema
+  `any2tosca`, `oas2tosca` and `yang2tosca`), where a reference to a schema embeds a value of that schema
   rather than linking to another resource. A property whose schema is a node
   type's schema gets a companion data type, `<Name>Value`, with the same
   properties as the node type `<Name>`. No capabilities, requirements or

@@ -1,7 +1,6 @@
 # One Pipeline, Format Rules Where Needed
 
-**Status:** Review and proposal (2026-11-25). A, B, C and D are implemented; E is
-open.
+**Status:** Review and proposal (2026-11-25). A to E are implemented.
 
 `any2tosca` converts JSON Schema to TOSCA, and treats OpenAPI, Redfish, YANG and
 the Kubernetes specification as JSON Schema with extra rules. This document
@@ -148,7 +147,7 @@ Capability files reach the profile through the files that import them. A
 warning names every imported file the run did not write, such as the
 user-supplied `Core.yaml`, since the profile is complete only with it.
 
-### E. Plain JSON Schema and YANG default to `value` (decision)
+### E. Plain JSON Schema and YANG default to `value`
 
 Their node types then carry no Redfish capabilities, `_caps.yaml` or `Core.yaml`
 import; `--relationship-model links` restores the current output.
@@ -163,9 +162,8 @@ import; `--relationship-model links` restores the current output.
 | B. Conventions, `redfish` switch | none with the presets | Redfish keeps every rule; `any2tosca` run on Redfish schema files no longer applies them |
 | C. Extensions kept | none unless `--extension-metadata` | |
 | D. `--profile` without `--split` | new output, only with the option | |
-| E. `value` default for JSON Schema and YANG | yes: no capabilities, `_caps.yaml` or `Core.yaml` | needs a decision |
+| E. `value` default for JSON Schema and YANG | yes: no capabilities, `_caps.yaml` or `Core.yaml` | nothing these formats generate targets those capabilities |
 
-A, B and C first, as three commits with the test suite unchanged; then D; E on a
-decision. Once B gates the Redfish rules, they can move out of `converter.py`
-(2,200 lines) into their own module, which makes the general converter readable
-on its own; that is optional and follows B.
+With B gating the Redfish rules, they can move out of `converter.py` (2,200
+lines) into their own module, which would make the general converter readable on
+its own. That move is optional.

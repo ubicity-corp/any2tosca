@@ -127,8 +127,8 @@ The expansion of Redfish's `Links` and `Actions` properties into requirements
 and an interface belongs to the Redfish rules (`Conventions.redfish`), which only
 `redfish2tosca` enables.
 
-`links` is the default of `any2tosca`,
-`redfish2tosca` and `yang2tosca`. `value` is the default of `oas2tosca`. Each CLI
+`links` is the default of `redfish2tosca`; `value` is the default of
+`any2tosca`, `oas2tosca` and `yang2tosca` (`docs/generalization.md`, E). Each CLI
 takes `--relationship-model links|value` to override its default. The by-value
 pre-pass runs when the model is `value`.
 

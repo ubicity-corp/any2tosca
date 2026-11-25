@@ -125,6 +125,7 @@ def _yang(path: Path, _: Path) -> Normalized:
 JSON_SCHEMA = InputFormat(
     name="jsonschema", label="JSON Schema", extensions=(".json",),
     load=load_json_or_yaml, normalizers=(_json_schema,), parse_errors=_JSON_ERRORS,
+    conventions=Conventions(relationship_model="value"),
 )
 
 REDFISH = InputFormat(
@@ -150,4 +151,5 @@ KUBERNETES = InputFormat(
 YANG = InputFormat(
     name="yang", label="YANG", extensions=(".yang",),
     load=load_path, normalizers=(_yang,), parse_errors=(Exception,),
+    conventions=Conventions(relationship_model="value"),
 )
