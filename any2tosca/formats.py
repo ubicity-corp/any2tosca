@@ -22,6 +22,7 @@ from typing import Any
 
 import yaml
 
+from .converter import Conventions
 from .kubernetes import EXTENSION_METADATA as KUBERNETES_EXTENSION_METADATA
 from .kubernetes import RULES_PATH as KUBERNETES_RULES_PATH
 from .kubernetes import KubernetesNormalizer
@@ -58,9 +59,10 @@ class InputFormat:
     load: Callable[[Path], Any]                 # file → document
     normalizers: tuple[Normalizer, ...]         # document → Normalized, in order
     parse_errors: tuple[type[BaseException], ...]  # load/normalize errors reported as parse errors
-    relationship_model: str = "links"           # default for --relationship-model
+    conventions: Conventions = Conventions()    # relationship model (the --relationship-model
+                                                # default), Redfish rules, extension metadata
+                                                # (added to --extension-metadata)
     required_relationship_model: str | None = None  # the only model the format accepts
-    extension_metadata: tuple[str, ...] = ()    # added to --extension-metadata
     split_rules: Path | None = None             # used when --split is not given
 
     def normalize(self, document: Any, path: Path) -> Normalized:
@@ -128,19 +130,21 @@ JSON_SCHEMA = InputFormat(
 REDFISH = InputFormat(
     name="redfish", label="Redfish JSON Schema", extensions=(".json",),
     load=load_json_or_yaml, normalizers=(_redfish,), parse_errors=_JSON_ERRORS,
+    conventions=Conventions(relationship_model="links", redfish=True),
 )
 
 OPENAPI = InputFormat(
     name="openapi", label="OpenAPI", extensions=(".json", ".yaml", ".yml"),
     load=load_json_or_yaml, normalizers=(_openapi,), parse_errors=_JSON_ERRORS,
-    relationship_model="value",
+    conventions=Conventions(relationship_model="value"),
 )
 
 KUBERNETES = InputFormat(
     name="kubernetes", label="OpenAPI", extensions=(".json", ".yaml", ".yml"),
     load=load_json_or_yaml, normalizers=(_openapi, _kubernetes), parse_errors=_JSON_ERRORS,
-    relationship_model="value", required_relationship_model="value",
-    extension_metadata=KUBERNETES_EXTENSION_METADATA, split_rules=KUBERNETES_RULES_PATH,
+    conventions=Conventions(relationship_model="value",
+                            extension_metadata=KUBERNETES_EXTENSION_METADATA),
+    required_relationship_model="value", split_rules=KUBERNETES_RULES_PATH,
 )
 
 YANG = InputFormat(

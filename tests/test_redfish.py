@@ -6,7 +6,15 @@ Tests for the RedfishNormalizer pre-processor.
 
 import pytest
 from any2tosca.redfish import RedfishNormalizer
-from any2tosca.converter import Converter
+from any2tosca.converter import Conventions, Converter
+from any2tosca.converter import convert_schema as _convert_schema
+
+REDFISH = Conventions(redfish=True)
+
+
+def _rf_convert(*args, **kwargs):
+    """Convert with the Redfish conventions, as redfish2tosca does."""
+    return _convert_schema(*args, conventions=REDFISH, **kwargs)
 
 n = RedfishNormalizer()
 
@@ -110,7 +118,7 @@ def test_anyof_null_flattened_inside_array_items():
     assert items == {"$ref": "#/definitions/MountPoint"}
 
     # End-to-end: entry_schema must resolve to MountPoint, not string
-    result = Converter().convert_schema(root, "Container", node_type_names)
+    result = _rf_convert(root, "Container", node_type_names)
     mount_points = result.node_types["Container"].get("properties", {}).get("MountPoints") or \
                    result.data_types.get("Container", {}).get("properties", {}).get("MountPoints")
     assert mount_points is not None
@@ -214,7 +222,7 @@ def test_flat_schema_type_preserved():
 
 def test_flat_schema_end_to_end():
     root, node_type_names = n.normalize(REDFISH_FLAT)
-    result = Converter().convert_schema(root, "Resource", node_type_names)
+    result = _rf_convert(root, "Resource", node_type_names)
     assert "Resource" in result.node_types
     assert "derived_from" not in result.node_types["Resource"]
     props = result.node_types["Resource"]["properties"]
@@ -226,7 +234,7 @@ def test_flat_schema_end_to_end():
 
 def test_end_to_end():
     root, node_type_names = n.normalize(REDFISH_DRIVE)
-    result = Converter().convert_schema(root, "drive", node_type_names)
+    result = _rf_convert(root, "drive", node_type_names)
 
     assert "Drive" in result.node_types
     assert "derived_from" not in result.node_types["Drive"]
@@ -284,7 +292,7 @@ def test_links_property_expanded_to_requirements():
     root, node_type_names = n.normalize(REDFISH_WITH_LINKS)
     # Manually add Thing as a node type (simulating Redfish resource detection)
     node_type_names = node_type_names | {"Thing", "Widget"}
-    result = Converter().convert_schema(root, "Widget", node_type_names)
+    result = _rf_convert(root, "Widget", node_type_names)
 
     widget = result.node_types["Widget"]
     # Links property must not appear
@@ -367,7 +375,7 @@ REDFISH_WITH_ACTIONS = {
 def test_actions_property_converted_to_interface_type():
     """Actions property is extracted into a TOSCA interface type, not kept as a property."""
     root, node_type_names = n.normalize(REDFISH_WITH_ACTIONS)
-    result = Converter().convert_schema(root, "ComputerSystem", node_type_names)
+    result = _rf_convert(root, "ComputerSystem", node_type_names)
 
     assert "ComputerSystem" in result.node_types
     cs = result.node_types["ComputerSystem"]
@@ -404,7 +412,7 @@ def test_actions_property_converted_to_interface_type():
 def test_actions_container_and_action_defs_removed_from_output():
     """Actions, OemActions, and action definition types must not appear in data/node types."""
     root, node_type_names = n.normalize(REDFISH_WITH_ACTIONS)
-    result = Converter().convert_schema(root, "ComputerSystem", node_type_names)
+    result = _rf_convert(root, "ComputerSystem", node_type_names)
 
     # Actions container type removed
     assert "Actions" not in result.data_types
@@ -421,7 +429,6 @@ def test_actions_with_external_param_ref(tmp_path):
     """Action parameters that $ref an external type produce a namespaced input type."""
     import json
     from pathlib import Path
-    from any2tosca.converter import convert_schema
 
     (tmp_path / "ResetType.json").write_text(json.dumps({
         "$id": "http://example.com/ResetType.json",
@@ -463,7 +470,7 @@ def test_actions_with_external_param_ref(tmp_path):
         },
     }
     root, node_type_names = n.normalize(schema)
-    result = convert_schema(root, "System", node_type_names,
+    result = _rf_convert(root, "System", node_type_names,
                             base_path=tmp_path,
                             source_path=tmp_path / "System.json")
 

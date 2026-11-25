@@ -13,13 +13,13 @@ __author__ = "Chris Lauwers"
 __copyright__ = "Copyright (c) 2022-2026, Ubicity Corp."
 __email__ = "info@ubicity.com"
 
-from .converter import Converter, ConversionResult, build_tosca_document, convert_schema
+from .converter import Converter, ConversionResult, Conventions, build_tosca_document, convert_schema
 from .openapi import OpenAPIExtractor
 from .redfish import RedfishNormalizer
 from .yaml_utils import dump_tosca_yaml
 
 __all__ = [
-    "Converter", "ConversionResult", "convert_schema", "build_tosca_document",
+    "Converter", "ConversionResult", "Conventions", "convert_schema", "build_tosca_document",
     "OpenAPIExtractor", "RedfishNormalizer",
     "dump_tosca_yaml",
 ]

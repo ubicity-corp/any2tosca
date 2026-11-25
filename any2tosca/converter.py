@@ -15,6 +15,7 @@ import json
 import re
 import sys
 from collections.abc import Collection, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -23,7 +24,33 @@ from referencing.jsonschema import DRAFT7
 
 from .yaml_utils import CommentedOut, FoldedStr
 
-__all__ = ["Converter", "ConversionResult", "convert_schema", "build_tosca_document", "build_caps_document"]
+__all__ = ["Converter", "ConversionResult", "Conventions", "convert_schema",
+           "build_tosca_document", "build_caps_document"]
+
+
+@dataclass(frozen=True)
+class Conventions:
+    """The conventions of an input format (``docs/generalization.md``).
+
+    relationship_model:
+        ``"links"``: a reference to a node type is a relationship (a
+        requirement), and node types get Feature and Containable capabilities
+        from ``Core.yaml``.  ``"value"``: a reference embeds a value; none of
+        that applies (see :func:`any2tosca.companions.add_value_companions`).
+    redfish:
+        The Redfish corpus rules: versioned schema files (``Name.vX_Y_Z``) form
+        families whose latest version is the base type and whose members share
+        one capability file; the file-root heuristic for ``redfish.dmtf.org``
+        schemas; and the expansion of the ``Links`` and ``Actions`` properties
+        into requirements and an interface.
+    extension_metadata:
+        Schema keys (typically vendor extensions, ``x-...``) copied into TOSCA
+        ``metadata``: from a definition into its type, and from a property's
+        schema into the property, as YAML values.
+    """
+    relationship_model: str = "links"
+    redfish: bool = False
+    extension_metadata: tuple[str, ...] = ()
 
 
 class ConversionResult(NamedTuple):
@@ -34,6 +61,7 @@ class ConversionResult(NamedTuple):
     relationship_types: dict[str, Any] = {}  # name → TOSCA relationship type dict
     interface_types: dict[str, Any] = {}   # name → TOSCA interface type dict
     capability_types: dict[str, Any] = {}  # name → TOSCA capability type dict (for companion caps file)
+    caps_file: str = ""                     # the companion caps file the capability types go to
 
 
 class Converter:
@@ -92,6 +120,7 @@ class Converter:
         self._type_to_caps: dict[str, tuple[str, str]] = {}  # bare_type_name → (caps_ns, caps_file)
         self._node_type_names: set[str] = set() # names that are node types in this file
         self._links: bool = True                # relationship model is "links"
+        self._redfish: bool = False             # the Redfish corpus rules apply
         self._extension_metadata: tuple[str, ...] = ()  # x- keys copied into metadata
         # In-memory schema set (persist across convert_schema calls until replaced)
         self._documents: dict[str, dict[str, Any]] = {}       # filename → parsed schema
@@ -233,17 +262,25 @@ class Converter:
         """Derive the expected TOSCA output filename for a JSON Schema file."""
         return Path(file_part).stem + ".yaml"
 
+    def _versioned(self, stem: str) -> "re.Match[str] | None":
+        """Match a versioned schema file stem (``Name.vX_Y_Z``) under the Redfish rules.
+
+        Every rule about versioned file families goes through this method, so
+        none of them applies when the Redfish rules are off.
+        """
+        return self._VER_RE.match(stem) if self._redfish else None
+
     def _caps_file_for(self, file_ref: str) -> str:
         """Derive the companion capability-types YAML filename for a schema or TOSCA file.
 
-        Strips any version suffix from the stem and appends ``_caps.yaml``.
-        Works with both JSON schema names (``Drive.v1_14_0.json``) and TOSCA
-        output names (``Drive.v1_14_0.yaml``) — all versions of the same
-        resource family share the same capability-types file (``Drive_caps.yaml``).
+        Appends ``_caps.yaml`` to the stem.  Under the Redfish rules the version
+        suffix is stripped first, so all versions of a resource family share one
+        capability-types file (``Drive.v1_14_0.json`` → ``Drive_caps.yaml``).
         """
         stem = Path(file_ref).stem
-        base = re.sub(r"[._]v\d+(?:[._]\d+)*$", "", stem) or stem
-        return f"{base}_caps.yaml"
+        if self._redfish:
+            stem = re.sub(r"[._]v\d+(?:[._]\d+)*$", "", stem) or stem
+        return f"{stem}_caps.yaml"
 
     def _requirement_capability_for(self, tosca_type: Any, kind: str) -> str:
         """Return a TOSCA capability-type reference for a requirement on *tosca_type*.
@@ -350,7 +387,6 @@ class Converter:
         """
         if not self._current_filename:
             return
-        _VER = self._VER_RE
         seen: set[str] = set()
 
         def _collect(obj: Any) -> None:
@@ -383,7 +419,7 @@ class Converter:
             if fname in self._no_import_files:
                 continue
             stem = Path(fname).stem
-            if _VER.match(stem):
+            if self._versioned(stem):
                 # Versioned file: direct check
                 if self._refs_back_to_current(ref):
                     self._mark_no_import(fname)
@@ -560,7 +596,7 @@ class Converter:
         # already inlined (and therefore not present in the root schema's refs,
         # so missed by the initial _collect_no_import_files pre-scan).
         stem = Path(fname).stem
-        if self._VER_RE.match(stem):
+        if self._versioned(stem):
             # If the unversioned base of this versioned schema is already
             # no-import, this versioned schema is part of the same family
             # and should also be treated as no-import.  This prevents
@@ -701,7 +737,7 @@ class Converter:
         uri = ref.partition("#")[0]
         fname = Path(uri).name
         stem = Path(uri.split("/")[-1]).stem
-        if self._VER_RE.match(stem):
+        if self._versioned(stem):
             # Versioned refs are always classified as "versioned" regardless of
             # circularity — _merge_allof uses the file-root bypass to import the
             # winning version even when it back-refs the current file.
@@ -778,7 +814,7 @@ class Converter:
         for ref in refs:
             uri = ref.partition("#")[0]
             stem = Path(uri.split("/")[-1]).stem   # last path component, no ext
-            m = self._VER_RE.match(stem)
+            m = self._versioned(stem)
             if not m:
                 return None
             base = m.group(1)
@@ -851,7 +887,7 @@ class Converter:
 
             elif kind == "versioned":
                 uri = ref.partition("#")[0]
-                m = self._VER_RE.match(Path(uri.split("/")[-1]).stem)
+                m = self._versioned(Path(uri.split("/")[-1]).stem)
                 versioned_groups.setdefault(m.group(1), []).append(ref)  # type: ignore[union-attr]
 
             else:  # "inline"
@@ -978,7 +1014,7 @@ class Converter:
             return True
 
         # Heuristic for Redfish schemas only: type name equals the base file stem.
-        if "redfish.dmtf.org" in doc.get("$id", ""):
+        if self._redfish and "redfish.dmtf.org" in doc.get("$id", ""):
             stem = Path(fname).stem
             base_stem = re.sub(r"[._]v\d+(?:[._]\d+)*$", "", stem) or stem
             if self.sanitize_name(type_name) == self.sanitize_name(base_stem):
@@ -1064,7 +1100,7 @@ class Converter:
         # Break symmetry lexicographically: the larger fname loses.
         if key in _stack:
             checking_stem_r = Path(checking_for).stem
-            if self._VER_RE.match(checking_stem_r):
+            if self._versioned(checking_stem_r):
                 checking_base_r = re.sub(r"\.v\d.*$", "", checking_stem_r) + Path(checking_for).suffix
             else:
                 checking_base_r = checking_for
@@ -1078,7 +1114,7 @@ class Converter:
             return False
         # Determine the unversioned "base" of checking_for
         checking_stem = Path(checking_for).stem
-        if self._VER_RE.match(checking_stem):
+        if self._versioned(checking_stem):
             base_name = re.sub(r"\.v\d.*$", "", checking_stem)
             checking_base = base_name + Path(checking_for).suffix
         else:
@@ -1089,7 +1125,7 @@ class Converter:
         # schemas still have their properties merged into the converted type,
         # so any external refs they contain DO generate TOSCA imports.
         for versioned_fname in self._ref_fnames_for(fname):
-            if not self._VER_RE.match(Path(versioned_fname).stem):
+            if not self._versioned(Path(versioned_fname).stem):
                 continue
             # Check if this versioned schema directly refs checking_for or its unversioned base.
             v_direct_refs = self._ref_fnames_for(versioned_fname)
@@ -1789,7 +1825,7 @@ class Converter:
                 # Detect the Redfish Links pattern: a property named "Links"
                 # whose $ref resolves to a type also named "Links".  Expand
                 # it into core:DependsOn requirements rather than a property.
-                if (self._links and is_node_type and pname == "Links"
+                if (self._redfish and is_node_type and pname == "Links"
                         and isinstance(pschema, dict) and "$ref" in pschema
                         and self._parse_ref(pschema["$ref"])[1] == "Links"):
                     links_requirements.extend(
@@ -1798,7 +1834,7 @@ class Converter:
                 # Detect the Redfish Actions pattern: a property named "Actions"
                 # whose $ref resolves to a type also named "Actions".  Convert
                 # each action into a TOSCA interface operation.
-                elif (self._links and is_node_type and pname == "Actions"
+                elif (self._redfish and is_node_type and pname == "Actions"
                         and isinstance(pschema, dict) and "$ref" in pschema
                         and self._parse_ref(pschema["$ref"])[1] == "Actions"):
                     actions_interface = self._extract_actions_interface(
@@ -1911,8 +1947,7 @@ class Converter:
         documents: Mapping[str, dict[str, Any]] | None = None,
         namespaces: Mapping[str, str] | None = None,
         node_types_by_file: Mapping[str, Collection[str]] | None = None,
-        relationship_model: str = "links",
-        extension_metadata: Collection[str] = (),
+        conventions: Conventions | None = None,
     ) -> ConversionResult:
         """
         Convert an entire JSON Schema document to TOSCA types.
@@ -1946,27 +1981,21 @@ class Converter:
             The names of the definitions that are node types, by filename.  A
             reference into a listed file is a node-type reference exactly when
             its type name is in that file's set.
-        relationship_model:
-            ``"links"`` (default) applies the Redfish conventions: references
-            to node types become requirements, and node types get Feature and
-            Containable capabilities from ``Core.yaml``.  ``"value"`` applies
-            none of them; references are expected to be by value (see
-            :func:`any2tosca.companions.add_value_companions`).
-        extension_metadata:
-            Schema keys (typically vendor extensions, ``x-...``) to copy into
-            TOSCA ``metadata``: from a definition into its type, and from a
-            property's schema into the property.  Values are copied as they
-            are (lists and maps stay lists and maps).
+        conventions:
+            The input format's conventions (:class:`Conventions`); the default
+            is the ``links`` relationship model without the Redfish rules.
 
         Returns
         -------
         ConversionResult
             Named tuple with ``data_types``, ``node_types``, and ``imports`` dicts.
         """
-        if relationship_model not in self.RELATIONSHIP_MODELS:
-            raise ValueError(f"unknown relationship model {relationship_model!r}")
-        self._links = relationship_model == "links"
-        self._extension_metadata = tuple(extension_metadata)
+        conventions = conventions or Conventions()
+        if conventions.relationship_model not in self.RELATIONSHIP_MODELS:
+            raise ValueError(f"unknown relationship model {conventions.relationship_model!r}")
+        self._links = conventions.relationship_model == "links"
+        self._redfish = conventions.redfish
+        self._extension_metadata = tuple(conventions.extension_metadata)
         new_search_paths = list(search_paths) if search_paths else []
         new_documents = dict(documents) if documents else {}
         if (base_path != self._base_path or new_search_paths != self._search_paths
@@ -2127,6 +2156,8 @@ class Converter:
             relationship_types=dict(self._relationship_types),
             interface_types=dict(self._interface_types),
             capability_types=dict(self._capability_types),
+            caps_file=(self._caps_file_for(self._current_filename)
+                       if self._current_filename else "caps.yaml"),
         )
 
     def build_tosca_document(
@@ -2168,15 +2199,13 @@ def convert_schema(
     documents: Mapping[str, dict[str, Any]] | None = None,
     namespaces: Mapping[str, str] | None = None,
     node_types_by_file: Mapping[str, Collection[str]] | None = None,
-    relationship_model: str = "links",
-    extension_metadata: Collection[str] = (),
+    conventions: Conventions | None = None,
 ) -> ConversionResult:
     return Converter().convert_schema(root_schema, top_level_name, node_type_names,
                                       base_path, search_paths, source_path,
                                       documents=documents, namespaces=namespaces,
                                       node_types_by_file=node_types_by_file,
-                                      relationship_model=relationship_model,
-                                      extension_metadata=extension_metadata)
+                                      conventions=conventions)
 
 
 def build_tosca_document(

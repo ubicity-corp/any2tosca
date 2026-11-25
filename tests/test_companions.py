@@ -12,7 +12,7 @@ import yaml
 
 from any2tosca.cli import main_oas, main_redfish
 from any2tosca.companions import CompanionError, add_value_companions
-from any2tosca.converter import Converter
+from any2tosca.converter import Conventions, Converter
 
 
 def _ref(name, container="definitions"):
@@ -123,7 +123,7 @@ def test_source_schema_is_not_modified():
 
 def _convert(model, root=None, nodes=NODES):
     root = add_value_companions(ROOT, nodes) if root is None else root
-    return Converter().convert_schema(root, "x", nodes, relationship_model=model)
+    return Converter().convert_schema(root, "x", nodes, conventions=Conventions(relationship_model=model))
 
 
 def test_value_model_adds_no_capabilities_or_core_import():
@@ -170,7 +170,7 @@ def test_unknown_relationship_model_is_rejected():
 
 def test_dotted_node_type_names_match_sanitized_definitions():
     root = {"definitions": {"io.x.v1.Pod": _obj(name={"type": "string"})}}
-    result = Converter().convert_schema(root, "x", {"io.x.v1.Pod"}, relationship_model="value")
+    result = Converter().convert_schema(root, "x", {"io.x.v1.Pod"}, conventions=Conventions(relationship_model="value"))
     assert set(result.node_types) == {"io_x_v1_Pod"}
 
 

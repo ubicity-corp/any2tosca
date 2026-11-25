@@ -17,13 +17,12 @@ __copyright__ = "Copyright (c) 2022-2026, Ubicity Corp."
 __email__ = "info@ubicity.com"
 
 import argparse
-import re
 import sys
 from pathlib import Path
 from typing import Any
 
 from .companions import CompanionError, add_value_companions
-from .converter import ConversionResult, Converter, build_caps_document, build_tosca_document
+from .converter import ConversionResult, Conventions, Converter, build_caps_document, build_tosca_document
 from .formats import JSON_SCHEMA, KUBERNETES, OPENAPI, REDFISH, YANG, InputFormat, Normalized
 from .split import SplitError, load_rules, skipped_definitions, split_schema
 from .yaml_utils import FoldedStr, dump_tosca_yaml
@@ -116,9 +115,19 @@ def _apply_format_defaults(fmt: InputFormat, args: argparse.Namespace) -> str | 
                 f"{fmt.required_relationship_model} relationship model.")
     if fmt.split_rules and not args.split:
         args.split = str(fmt.split_rules)
-    if fmt.extension_metadata:
-        args.extension_metadata = list(dict.fromkeys([*fmt.extension_metadata, *args.extension_metadata]))
+    if fmt.conventions.extension_metadata:
+        args.extension_metadata = list(dict.fromkeys(
+            [*fmt.conventions.extension_metadata, *args.extension_metadata]))
     return None
+
+
+def _conventions(fmt: InputFormat, args: argparse.Namespace) -> Conventions:
+    """The format's conventions with the relationship model and extension keys of *args*."""
+    return Conventions(
+        relationship_model=args.relationship_model,
+        redfish=fmt.conventions.redfish,
+        extension_metadata=tuple(args.extension_metadata),
+    )
 
 
 def _split_args_error(args: argparse.Namespace, input_files: list[Path]) -> str | None:
@@ -204,9 +213,7 @@ def _write_file(result: ConversionResult, stem: str, out_dir: Path) -> Path:
     out_path.write_text(dump_tosca_yaml(tosca_doc), encoding="utf-8")
 
     if result.capability_types:
-        # Strip version suffix (e.g. .v1_14_0) to get the base name
-        base = re.sub(r"[._]v\d+(?:[._]\d+)*$", "", stem) or stem
-        caps_path = out_dir / f"{base}_caps.yaml"
+        caps_path = out_dir / (result.caps_file or f"{stem}_caps.yaml")
         caps_doc = build_caps_document(result.capability_types)
         caps_path.write_text(dump_tosca_yaml(caps_doc), encoding="utf-8")
 
@@ -230,6 +237,7 @@ def _write_profile(names: list[str], profile: str, out_dir: Path) -> None:
 
 def _run_split(
     normalized: Normalized,
+    conventions: Conventions,
     args: argparse.Namespace,
     input_path: Path,
     search_paths: list[Path],
@@ -268,8 +276,7 @@ def _run_split(
             documents=split.documents,
             namespaces=split.namespaces,
             node_types_by_file=split.node_types_by_file,
-            relationship_model=args.relationship_model,
-            extension_metadata=args.extension_metadata,
+            conventions=conventions,
         )
         _report(result, args.verbose, Path(unit.tosca_file))
         out_path = _write_file(result, unit.name, out_dir)
@@ -302,6 +309,7 @@ def run(fmt: InputFormat, args: argparse.Namespace) -> int:
 
     out_dir = Path(args.output) if args.output else Path("tosca")
     out_dir.mkdir(parents=True, exist_ok=True)
+    conventions = _conventions(fmt, args)
     converter = Converter()
     search_paths = [Path(d) for d in args.include_dir]
     written = errors = 0
@@ -312,7 +320,7 @@ def run(fmt: InputFormat, args: argparse.Namespace) -> int:
             errors += 1
             continue
         if args.split:
-            return _run_split(normalized, args, path, search_paths, out_dir)
+            return _run_split(normalized, conventions, args, path, search_paths, out_dir)
         root_schema = _by_value(normalized.root_schema, normalized.node_type_names, args)
         if root_schema is None:
             errors += 1
@@ -322,8 +330,7 @@ def run(fmt: InputFormat, args: argparse.Namespace) -> int:
                                           base_path=path.parent,
                                           search_paths=search_paths,
                                           source_path=path,
-                                          relationship_model=args.relationship_model,
-                                          extension_metadata=args.extension_metadata)
+                                          conventions=conventions)
         _report(result, args.verbose, path)
         if not result.data_types and not result.node_types:
             continue
@@ -352,7 +359,7 @@ def main_json(argv: list[str] | None = None) -> int:
         "  any2tosca my_schema.json\n"
         "  any2tosca schemas/ -o output/\n"
         "  any2tosca a.json b.json -o output/",
-        default_model=JSON_SCHEMA.relationship_model,
+        default_model=JSON_SCHEMA.conventions.relationship_model,
     )
     return run(JSON_SCHEMA, parser.parse_args(argv))
 
@@ -365,7 +372,7 @@ def main_redfish(argv: list[str] | None = None) -> int:
         "Examples:\n"
         "  redfish2tosca Drive.json\n"
         "  redfish2tosca schemas/ -o tosca/",
-        default_model=REDFISH.relationship_model,
+        default_model=REDFISH.conventions.relationship_model,
     )
     return run(REDFISH, parser.parse_args(argv))
 
@@ -379,7 +386,7 @@ def main_oas(argv: list[str] | None = None) -> int:
         "  oas2tosca api.yaml\n"
         "  oas2tosca api.json -o output/\n"
         "  oas2tosca specs/ -o output/",
-        default_model=OPENAPI.relationship_model,
+        default_model=OPENAPI.conventions.relationship_model,
     )
     parser.add_argument(
         "--kubernetes",
@@ -401,7 +408,7 @@ def main_yang(argv: list[str] | None = None) -> int:
         "Examples:\n"
         "  yang2tosca server.yang\n"
         "  yang2tosca models/ -o tosca/",
-        default_model=YANG.relationship_model,
+        default_model=YANG.conventions.relationship_model,
     )
     return run(YANG, parser.parse_args(argv))
 

@@ -11,7 +11,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from any2tosca.converter import Converter, ConversionResult, build_tosca_document, convert_schema
+from any2tosca.converter import Converter, ConversionResult, Conventions, build_tosca_document, convert_schema
+
+REDFISH = Conventions(redfish=True)
 from any2tosca.cli import main_json
 
 c = Converter()
@@ -436,7 +438,7 @@ def test_anyof_versioned_refs_picks_latest(tmp_path: Path):
             }
         }
     }
-    result = c.convert_schema(schema, "top", base_path=tmp_path)
+    result = c.convert_schema(schema, "top", base_path=tmp_path, conventions=REDFISH)
     # Should pick v1_2_0 (highest version) — it has both id and name
     assert result.data_types["Thing"]["derived_from"] == "resource:Resource"
     assert "resource" in result.imports
@@ -569,7 +571,7 @@ def test_anyof_single_versioned_external_ref_uses_derived_from(tmp_path: Path):
         "type": "object",
         "anyOf": [{"$ref": "Base.v1_0_0.json"}],
     }
-    result = convert_schema(schema, "Child", base_path=tmp_path)
+    result = convert_schema(schema, "Child", base_path=tmp_path, conventions=REDFISH)
     dt = result.data_types.get("Child", {})
     assert "derived_from" in dt
     assert "basev100" in dt["derived_from"].lower() or "Base" in dt["derived_from"]
@@ -610,7 +612,7 @@ def test_anyof_versioned_plus_unversioned(tmp_path: Path):
             {"$ref": "Container.v1_0_0.json"},
         ],
     }
-    result = convert_schema(schema, "Container", node_type_names={"Container"},
+    result = convert_schema(schema, "Container", node_type_names={"Container"}, conventions=REDFISH,
                             base_path=tmp_path)
     node = result.node_types.get("Container", {})
     # Versioned ref → derived_from
@@ -1071,8 +1073,8 @@ _EXT_KEYS = ["x-kubernetes-group-version-kind", "x-kubernetes-list-type",
 
 
 def _ext_convert(keys=_EXT_KEYS):
-    return Converter().convert_schema(_EXT_ROOT, "x", {"Deployment"}, extension_metadata=keys,
-                                      relationship_model="value")
+    return Converter().convert_schema(_EXT_ROOT, "x", {"Deployment"}, conventions=Conventions(
+        relationship_model="value", extension_metadata=tuple(keys)))
 
 
 def test_extension_metadata_on_type_keeps_yaml_values():
@@ -1142,7 +1144,7 @@ _RO_ROOT = {"definitions": {
 @pytest.mark.parametrize("model", ["links", "value"])
 def test_read_only_property_of_node_type_becomes_attribute(model):
     dep = Converter().convert_schema(_RO_ROOT, "x", {"Deployment"},
-                                     relationship_model=model).node_types["Deployment"]
+                                     conventions=Conventions(relationship_model=model)).node_types["Deployment"]
     assert "status" not in dep["properties"]
     assert dep["attributes"]["status"]["type"] == "Status"
     assert dep["attributes"]["status"]["description"] == "Observed state."
@@ -1151,14 +1153,14 @@ def test_read_only_property_of_node_type_becomes_attribute(model):
 
 def test_attribute_has_no_required_keyword():
     dep = Converter().convert_schema(_RO_ROOT, "x", {"Deployment"},
-                                     relationship_model="value").node_types["Deployment"]
+                                     conventions=Conventions(relationship_model="value")).node_types["Deployment"]
     assert "required" not in dep["attributes"]["status"]
     assert dep["properties"]["spec"]["required"] is True
 
 
 def test_attributes_follow_properties():
     dep = Converter().convert_schema(_RO_ROOT, "x", {"Deployment"},
-                                     relationship_model="value").node_types["Deployment"]
+                                     conventions=Conventions(relationship_model="value")).node_types["Deployment"]
     keys = list(dep)
     assert keys.index("attributes") == keys.index("properties") + 1
 
