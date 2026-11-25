@@ -109,6 +109,43 @@ looked for beside the input file first, then in each `-I` directory. TOSCA does
 not allow circular imports, so reference cycles between files are broken
 during conversion ([docs/circular-import-algorithm.md](docs/circular-import-algorithm.md)).
 
+### Splitting one input into several files
+
+A single large input, such as an OpenAPI document whose schema names follow a
+package convention, can be converted into several TOSCA files that import each
+other. Split rules, in a YAML file, assign each schema to a file by its name:
+
+```yaml
+rules:
+  - match: '.*List'                             # first matching rule wins
+    skip: true
+  - match: 'io\.k8s\.apimachinery\.pkg\.apis\.meta\.v1\.(?P<name>[^.]+)'
+    unit: meta                                  # written to meta.yaml
+  - match: 'io\.k8s\.api\.(?P<unit>[a-z]+)\.v1\.(?P<name>[^.]+)'
+  - match: '.*'
+    skip: true
+```
+
+The `unit` named group or the `unit` key names the output file; the `name`
+named group gives the TOSCA type name (otherwise the full schema name is used).
+A rule may set the file's import `namespace` (default: the unit name) or `skip`
+the schemas it matches. Schemas that match no rule go to the unit named by
+`default_unit`, and are an error without one.
+
+```bash
+oas2tosca api.json --split rules.yaml --profile io.example:1.0 -o profile/
+```
+
+| Option | |
+|---|---|
+| `--split RULES` | split the input using the rules in `RULES`; takes exactly one input file |
+| `--merge-cycles` | merge files that would import each other in a cycle, instead of failing |
+| `--allow-skipped-refs` | warn, instead of failing, when a converted type references a skipped schema |
+| `--profile NAME:VERSION` | also write `profile.yaml`, importing every file, and `TOSCA.meta` |
+
+Two schemas that get the same type name in one file, and files that import each
+other in a cycle, are errors. See [docs/multi-output.md](docs/multi-output.md).
+
 ## What it generates
 
 - **Data types** for objects, enumerations and constrained scalars. Object
@@ -292,10 +329,10 @@ YANG integer types (`int8`–`int64`, `uint8`–`uint64`) map to TOSCA `integer`
   `discriminator`. The values they constrain are converted; the constraints
   they add are not.
 - **Kubernetes:** the Kubernetes OpenAPI definitions convert like any other
-  OpenAPI document, into one set of types. Splitting them into one profile per
-  API group, as
-  [oas2tosca](https://github.com/ubicity-corp/oas2tosca) does for the
-  Kubernetes profiles, is not yet supported.
+  OpenAPI document, and `--split` divides them into one file per API group.
+  The Kubernetes conventions (which schemas are resources, the `x-kubernetes-*`
+  extensions, by-value references between resources) are not yet supported;
+  see [docs/kubernetes.md](docs/kubernetes.md).
 
 ## Python API
 

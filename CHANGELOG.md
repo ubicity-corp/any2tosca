@@ -2,6 +2,13 @@
 
 What changed in each release, and what to do about it.
 
+## Unreleased
+
+- **Several TOSCA files from one input.** `--split RULES` divides the schemas of
+  one input file among several TOSCA files by name, with imports between them;
+  `--profile NAME:VERSION` also writes `profile.yaml` and `TOSCA.meta`. Available
+  on all four commands. Output without these options is unchanged.
+
 ## 0.1.0
 
 The first release published on PyPI, under the Apache 2.0 license. Four
