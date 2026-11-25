@@ -28,7 +28,8 @@ class RedfishNormalizer:
     - ``@odata.*`` and ``@Redfish.*`` properties are dropped.
     - ``x-longDescription`` is promoted to ``description`` when no description
       is present.
-    - All other ``x-*`` extension keywords are dropped.
+    - Other ``x-*`` extension keywords are kept; the converter copies the ones
+      named in ``extension_metadata`` into TOSCA metadata and ignores the rest.
     - External ``$ref`` URIs are left as-is; the converter treats them as
       unresolvable and skips them gracefully.
 
@@ -117,9 +118,6 @@ class RedfishNormalizer:
         if "description" not in schema and "x-longDescription" in schema:
             schema["description"] = schema["x-longDescription"]
 
-        # Drop all x-* extension keywords
-        schema = {k: v for k, v in schema.items() if not k.startswith("x-")}
-
         if "properties" in schema:
             schema["properties"] = self._normalize_properties(schema["properties"])
             if not schema["properties"]:
@@ -163,9 +161,6 @@ class RedfishNormalizer:
         if "description" not in schema and "x-longDescription" in schema:
             schema = dict(schema)
             schema["description"] = schema["x-longDescription"]
-
-        # Drop x-* extensions
-        schema = {k: v for k, v in schema.items() if not k.startswith("x-")}
 
         # Recurse into nested properties and array items
         if "properties" in schema:

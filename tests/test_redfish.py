@@ -127,10 +127,28 @@ def test_anyof_null_flattened_inside_array_items():
 
 # ── x- extension handling ─────────────────────────────────────────────────────
 
-def test_x_extensions_dropped():
+def test_x_extensions_kept():
     root, _ = n.normalize(REDFISH_DRIVE)
     id_prop = root["definitions"]["Drive"]["properties"]["Id"]
-    assert "x-longDescription" not in id_prop
+    assert id_prop["x-longDescription"] == "Unique identifier."
+
+
+def test_extension_metadata_option_works_for_redfish(tmp_path):
+    import json
+    import yaml
+    from any2tosca.cli import main_redfish
+    schema = {
+        "$ref": "#/definitions/Fan",
+        "definitions": {"Fan": {"type": "object", "x-vendor": "acme",
+                                "properties": {"Speed": {"type": "integer", "x-units": "RPM"}}}},
+    }
+    (tmp_path / "Fan.json").write_text(json.dumps(schema))
+    out = tmp_path / "out"
+    assert main_redfish([str(tmp_path / "Fan.json"), "--extension-metadata", "x-units",
+                         "-o", str(out)]) == 0
+    fan = yaml.safe_load((out / "Fan.yaml").read_text())["node_types"]["Fan"]
+    assert fan["properties"]["Speed"]["metadata"] == {"x-units": "RPM"}
+    assert "metadata" not in fan     # x-vendor not requested
 
 
 def test_x_longdescription_promoted_when_no_description():
