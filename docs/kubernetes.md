@@ -263,6 +263,10 @@ oas2tosca --kubernetes swagger.json --profile io.kubernetes:1.35 -o io/kubernete
 - `--split` to the packaged Kubernetes rules,
 - the relationship model to `value` (already the `oas2tosca` default),
 - `extension_metadata` to the four keys above,
+- `--allow-skipped-refs`: a GA type may reference alpha or beta types the rules
+  skip (in 1.37, `batch/v1` `JobSchedulingConfiguration` uses four
+  `scheduling.k8s.io/v1alpha3` types); such a field falls back to its JSON type,
+  with a warning,
 - `KubernetesNormalizer` after `OpenAPIExtractor`.
 
 It is an explicit flag rather than detection from the input, so that the output of

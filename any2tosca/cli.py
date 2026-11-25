@@ -115,6 +115,8 @@ def _apply_format_defaults(fmt: InputFormat, args: argparse.Namespace) -> str | 
                 f"{fmt.required_relationship_model} relationship model.")
     if fmt.split_rules and not args.split:
         args.split = str(fmt.split_rules)
+    if fmt.allow_skipped_refs:
+        args.allow_skipped_refs = True
     if fmt.conventions.extension_metadata:
         args.extension_metadata = list(dict.fromkeys(
             [*fmt.conventions.extension_metadata, *args.extension_metadata]))

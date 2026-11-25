@@ -64,6 +64,7 @@ class InputFormat:
                                                 # (added to --extension-metadata)
     required_relationship_model: str | None = None  # the only model the format accepts
     split_rules: Path | None = None             # used when --split is not given
+    allow_skipped_refs: bool = False            # references to skipped definitions only warn
 
     def normalize(self, document: Any, path: Path) -> Normalized:
         """Run the format's normalizers on a loaded document."""
@@ -146,6 +147,10 @@ KUBERNETES = InputFormat(
     conventions=Conventions(relationship_model="value",
                             extension_metadata=KUBERNETES_EXTENSION_METADATA),
     required_relationship_model="value", split_rules=KUBERNETES_RULES_PATH,
+    # A GA type may reference alpha or beta types the rules skip (1.37: batch/v1
+    # JobSchedulingConfiguration uses scheduling.k8s.io/v1alpha3 types); those
+    # fields fall back to their JSON type.
+    allow_skipped_refs=True,
 )
 
 YANG = InputFormat(

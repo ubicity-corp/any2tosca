@@ -319,7 +319,9 @@ oas2tosca --kubernetes swagger.json --profile io.kubernetes:1.35 -o io/kubernete
 
 - Alpha and beta versions and the `*List` kinds are left out. The packaged
   split rules ([any2tosca/rules/kubernetes.yaml](any2tosca/rules/kubernetes.yaml))
-  decide the files; `--split RULES` replaces them.
+  decide the files; `--split RULES` replaces them. A GA field whose type is an
+  alpha or beta type falls back to its JSON type (`map`, `string`, ...), with a
+  warning.
 - Resources (schemas posted to a collection) become node types. Their
   `x-kubernetes-group-version-kind` becomes a `metadata` map, with `group: ''`
   for the core group; `apiVersion` and `kind`, which the type determines, are

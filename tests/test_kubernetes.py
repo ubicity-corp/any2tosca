@@ -260,3 +260,19 @@ def test_kubernetes_requires_value_model(tmp_path, capsys):
     rc = main_oas(["--kubernetes", "--relationship-model", "links", str(spec), "-o", str(tmp_path / "o")])
     assert rc == 1
     assert "value relationship model" in capsys.readouterr().err
+
+
+def test_kubernetes_allows_references_to_skipped_alpha_types(tmp_path, capsys):
+    # A GA type referencing an alpha type the rules skip (as batch/v1 does in 1.37).
+    spec = copy.deepcopy(SPEC)
+    spec["definitions"][f"{API}.batch.v1.JobSchedulingConfiguration"] = _obj(
+        policy=_ref(f"{API}.scheduling.v1alpha3.WorkloadPodGroupSchedulingPolicy"))
+    spec["definitions"][f"{API}.scheduling.v1alpha3.WorkloadPodGroupSchedulingPolicy"] = _obj(
+        mode={"type": "string"})
+    path = tmp_path / "swagger.json"
+    path.write_text(json.dumps(spec))
+    out = tmp_path / "out"
+    assert main_oas(["--kubernetes", str(path), "-o", str(out)]) == 0
+    assert "WorkloadPodGroupSchedulingPolicy" in capsys.readouterr().err
+    batch = _load(out, "batch")
+    assert batch["data_types"]["JobSchedulingConfiguration"]["properties"]["policy"]["type"] == "map"

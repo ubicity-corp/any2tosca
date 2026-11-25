@@ -31,7 +31,8 @@ What changed in each release, and what to do about it.
 - **Kubernetes.** `oas2tosca --kubernetes` converts the Kubernetes OpenAPI
   specification into one file per GA API group, using packaged split rules,
   with `x-kubernetes-*` extensions as metadata, resource types without
-  `apiVersion`/`kind` properties, and `status` as an attribute.
+  `apiVersion`/`kind` properties, and `status` as an attribute. A GA field
+  whose type is an alpha or beta type falls back to its JSON type.
 - **Property names keep the schema's spelling.** Property and attribute names
   are no longer sanitized: `cpu-count` stays `cpu-count` (it was `cpu_count`),
   and names such as `$ref` and `x-kubernetes-list-type` are kept. Type names
